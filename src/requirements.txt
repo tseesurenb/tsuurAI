@@ -9,3 +9,7 @@ pyctcdecode
 bitsandbytes
 accelerate
 peft
+streamlit-authenticator
+google-auth
+google-auth-oauthlib
+bcrypt

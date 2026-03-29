@@ -6,6 +6,14 @@ from openai import OpenAI
 
 st.set_page_config(page_title="TsuurAI - Speech to Text", page_icon="🎤", layout="wide")
 
+# Authentication
+from auth import show_login_page, show_user_sidebar, log_usage
+
+# Check authentication
+if not st.session_state.get("authenticated"):
+    show_login_page()
+    st.stop()
+
 # Load OpenAI API key from environment variable
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 if OPENAI_API_KEY:
@@ -25,6 +33,9 @@ os.environ["XDG_CACHE_HOME"] = str(MODELS_DIR)
 
 st.title("🎤 TsuurAI - Speech to Text")
 st.write("Multi-model speech recognition on NVIDIA A2 GPU")
+
+# Show user info in sidebar
+show_user_sidebar()
 
 # Model information database
 MODEL_INFO = {
@@ -671,11 +682,23 @@ def transcribe_audio(audio_data, file_ext=".wav"):
                         st.write("**Raw (best):**", full_text)
                         st.write("**Corrected:**", corrected_text)
 
+                # Log usage
+                log_usage(st.session_state.get("user_email"), "transcription", {
+                    "model": model_key,
+                    "language": language,
+                    "llm_corrected": True
+                })
                 return corrected_text
         else:
             st.subheader("Final Text")
             st.text_area("Output", full_text, height=150, key="final_output")
 
+        # Log usage
+        log_usage(st.session_state.get("user_email"), "transcription", {
+            "model": model_key,
+            "language": language,
+            "llm_corrected": False
+        })
         return full_text
 
     except Exception as e:
