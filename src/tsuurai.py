@@ -169,15 +169,13 @@ Correct any errors in this {language} text. Fix:
 Return ONLY the corrected {language} text, nothing else."""
 
     try:
-        # Format for chat
-        messages = [{"role": "user", "content": prompt}]
+        # Format prompt - use simple format that works with most models
+        # Llama-3 instruct format
+        input_text = f"""<|begin_of_text|><|start_header_id|>user<|end_header_id|>
 
-        # Try to use chat template if available
-        if hasattr(tokenizer, 'apply_chat_template'):
-            input_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        else:
-            input_text = f"User: {prompt}\nAssistant:"
+{prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 
+"""
         inputs = tokenizer(input_text, return_tensors="pt").to(model.device)
 
         with torch.no_grad():
@@ -192,12 +190,23 @@ Return ONLY the corrected {language} text, nothing else."""
         # Decode and extract response
         full_response = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-        # Extract only the generated part
-        if "Assistant:" in full_response:
+        # Extract only the generated part (after the prompt)
+        # Try different extraction methods
+        if "<|eot_id|>" in full_response:
+            # Llama-3 format - get text after last assistant header
+            parts = full_response.split("assistant")
+            if len(parts) > 1:
+                corrected = parts[-1].strip()
+            else:
+                corrected = full_response.strip()
+        elif "Assistant:" in full_response:
             corrected = full_response.split("Assistant:")[-1].strip()
         else:
             # Remove the input prompt from output
-            corrected = full_response[len(input_text):].strip()
+            corrected = full_response.split(prompt)[-1].strip()
+
+        # Clean up any remaining special tokens or markers
+        corrected = corrected.replace("<|eot_id|>", "").replace("<|end_of_text|>", "").strip()
 
         return corrected, None
 
