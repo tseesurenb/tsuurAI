@@ -69,7 +69,7 @@ with st.sidebar:
     model_family = st.selectbox(
         "AI Model Family",
         ["Whisper (OpenAI)", "MMS (Meta)"],
-        index=0
+        index=1  # Default: MMS
     )
 
     # Model size selection based on family
@@ -92,7 +92,7 @@ with st.sidebar:
     language = st.selectbox(
         "Language",
         ["English", "Mongolian"],
-        index=0
+        index=1  # Default: Mongolian
     )
 
     # Language-specific recommendation
@@ -215,15 +215,20 @@ def transcribe_audio(audio_data, file_ext=".wav"):
     import torch
     import numpy as np
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
-        tmp.write(audio_data)
-        tmp_path = tmp.name
+    st.caption(f"Debug: transcribe_audio called, data size={len(audio_data)}, ext={file_ext}")
 
     try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
+            tmp.write(audio_data)
+            tmp_path = tmp.name
+        st.caption(f"Debug: Temp file created at {tmp_path}")
+
         if model_key == "whisper":
             lang_code = LANGUAGE_CODES[language]["whisper"]
             st.info(f"Transcribing with: **{model_family}** | Language: **{language}** ({lang_code})")
+            st.caption("Debug: Calling whisper transcribe_with_vad...")
             result = model.transcribe_with_vad([tmp_path], lang_codes=[lang_code])
+            st.caption(f"Debug: Whisper returned {len(result)} results")
 
             st.subheader("Transcription")
             for segment in result[0]:
@@ -233,21 +238,27 @@ def transcribe_audio(audio_data, file_ext=".wav"):
 
         else:  # MMS
             import librosa
+            st.caption("Debug: Loading audio with librosa...")
             audio, sr = librosa.load(tmp_path, sr=16000)
+            st.caption(f"Debug: Audio loaded, shape={audio.shape}, sr={sr}")
 
             lang_code = LANGUAGE_CODES[language]["mms"]
             st.info(f"Transcribing with: **{model_family}** | Language: **{language}** ({lang_code})")
+            st.caption(f"Debug: Setting MMS language to {lang_code}...")
             mms_processor.tokenizer.set_target_lang(lang_code)
             mms_model.load_adapter(lang_code)
 
+            st.caption("Debug: Processing audio...")
             inputs = mms_processor(audio, sampling_rate=16000, return_tensors="pt")
             inputs = {k: v.to("cuda") for k, v in inputs.items()}
 
+            st.caption("Debug: Running inference...")
             with torch.no_grad():
                 outputs = mms_model(**inputs).logits
 
             ids = torch.argmax(outputs, dim=-1)[0]
             full_text = mms_processor.decode(ids)
+            st.caption(f"Debug: Transcription complete, length={len(full_text)}")
 
             st.subheader("Transcription")
             st.write(full_text)
@@ -255,8 +266,15 @@ def transcribe_audio(audio_data, file_ext=".wav"):
         st.text_area("Full Text", full_text, height=150)
         return full_text
 
+    except Exception as e:
+        st.error(f"Transcription error: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
+        return None
+
     finally:
-        os.unlink(tmp_path)
+        if 'tmp_path' in locals() and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 # Main content - Show current settings
 st.markdown(f"**Current settings:** {model_family} ({model_size}) | Language: {language}")
@@ -267,16 +285,29 @@ tab1, tab2 = st.tabs(["🎙️ Record", "📁 Upload File"])
 with tab1:
     st.write("Click the microphone button to record your voice")
 
-    # Use Streamlit's built-in audio input
-    audio_value = st.audio_input("Record audio", key="audio_recorder")
+    try:
+        # Use Streamlit's built-in audio input
+        audio_value = st.audio_input("Record audio", key="audio_recorder")
+        st.caption("Debug: audio_input component loaded")
 
-    if audio_value:
-        st.success(f"Recording captured: {len(audio_value.getvalue()) / 1024:.1f} KB")
-        st.audio(audio_value)
+        if audio_value:
+            audio_bytes = audio_value.getvalue()
+            st.success(f"Recording captured: {len(audio_bytes) / 1024:.1f} KB")
+            st.caption(f"Debug: Audio type={type(audio_value)}, bytes length={len(audio_bytes)}")
+            st.audio(audio_value)
 
-        if st.button("Transcribe Recording", type="primary", key="transcribe_rec"):
-            with st.spinner("Transcribing recording..."):
-                transcribe_audio(audio_value.getvalue(), ".wav")
+            if st.button("Transcribe Recording", type="primary", key="transcribe_rec"):
+                st.caption("Debug: Transcribe button clicked")
+                st.caption(f"Debug: Saving {len(audio_bytes)} bytes to temp file...")
+                with st.spinner("Transcribing recording..."):
+                    transcribe_audio(audio_bytes, ".wav")
+        else:
+            st.caption("Debug: No audio recorded yet")
+
+    except Exception as e:
+        st.error(f"Recording error: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
 
 with tab2:
     uploaded_file = st.file_uploader("Upload audio file", type=["wav", "mp3", "m4a", "flac", "ogg"])
