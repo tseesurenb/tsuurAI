@@ -184,9 +184,17 @@ with st.sidebar:
             }
             info = llm_info[llm_model]
             st.caption(f"{info['quality']} | {info['speed']} | {info['cost']}")
+
+            # Top-K candidates selection
+            top_k = st.slider("Top-K candidates", min_value=1, max_value=10, value=5)
+            st.caption(f"ASR will generate {top_k} candidates for LLM to choose from")
+        else:
+            llm_model = None
+            top_k = 1
     else:
         use_llm_correction = False
         llm_model = None
+        top_k = 1
         st.warning("Set OPENAI_API_KEY environment variable to enable.")
 
     st.divider()
@@ -264,13 +272,15 @@ with st.sidebar:
 # Load model based on selection
 @st.cache_resource
 def load_whisper_model(model_id):
-    import whisper_s2t
-    # whisper_s2t uses HF_HOME/XDG_CACHE_HOME env vars set at top of file
-    return whisper_s2t.load_model(
-        model_identifier=model_id,
-        backend='CTranslate2',
-        compute_type='float16'
+    from faster_whisper import WhisperModel
+    # Load faster-whisper model directly for beam search support
+    model = WhisperModel(
+        model_id,
+        device="cuda",
+        compute_type="float16",
+        download_root=str(MODELS_DIR / "huggingface")
     )
+    return model
 
 @st.cache_resource
 def load_mms_model():
@@ -288,6 +298,45 @@ def load_mms_model():
     )
     model = model.to("cuda")
     return processor, model
+
+def get_mms_nbest(logits, processor, beam_width=5):
+    """Get N-best candidates from MMS using CTC beam search"""
+    import torch
+    import numpy as np
+
+    try:
+        from pyctcdecode import build_ctcdecoder
+
+        # Get vocabulary from processor
+        vocab_dict = processor.tokenizer.get_vocab()
+        # Sort by index to get correct order
+        sorted_vocab = sorted(vocab_dict.items(), key=lambda x: x[1])
+        labels = [item[0] for item in sorted_vocab]
+
+        # Build CTC decoder
+        decoder = build_ctcdecoder(labels)
+
+        # Convert logits to numpy and get log probabilities
+        log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+        log_probs_np = log_probs.cpu().numpy()[0]  # Remove batch dimension
+
+        # Decode with beam search
+        beams = decoder.decode_beams(log_probs_np, beam_width=beam_width)
+
+        # Extract text and scores
+        candidates = []
+        for beam in beams[:beam_width]:
+            text = beam[0]  # The decoded text
+            score = beam[-1]  # Log probability score
+            candidates.append({"text": text, "score": float(score)})
+
+        return candidates
+
+    except Exception as e:
+        # Fallback to greedy decoding if beam search fails
+        ids = torch.argmax(logits, dim=-1)[0]
+        text = processor.decode(ids)
+        return [{"text": text, "score": 1.0}]
 
 # Load selected model
 model_exists = check_model_exists(model_key, model_size)
@@ -307,20 +356,56 @@ def transcribe_audio(audio_data, file_ext=".wav"):
 
     st.caption(f"Debug: transcribe_audio called, data size={len(audio_data)}, ext={file_ext}")
 
+    # Determine beam width based on settings
+    beam_width = top_k if use_llm_correction else 1
+
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
             tmp.write(audio_data)
             tmp_path = tmp.name
         st.caption(f"Debug: Temp file created at {tmp_path}")
 
+        candidates = []
+
         if model_key == "whisper":
             lang_code = LANGUAGE_CODES[language]["whisper"]
-            st.info(f"Transcribing with: **{model_family}** | Language: **{language}** ({lang_code})")
-            st.caption("Debug: Calling whisper transcribe_with_vad...")
-            result = model.transcribe_with_vad([tmp_path], lang_codes=[lang_code])
-            st.caption(f"Debug: Whisper returned {len(result)} results")
+            st.info(f"Transcribing with: **{model_family}** | Language: **{language}** ({lang_code}) | Beam: {beam_width}")
 
-            full_text = " ".join([seg['text'] for seg in result[0]])
+            # Use faster-whisper with beam search
+            segments, info = model.transcribe(
+                tmp_path,
+                language=lang_code,
+                beam_size=beam_width,
+                best_of=beam_width,
+                temperature=0.0,
+            )
+
+            # Collect segments into full text
+            segment_texts = [segment.text for segment in segments]
+            full_text = " ".join(segment_texts).strip()
+
+            # For Whisper, we get one result but with beam search for better accuracy
+            # To get actual N-best, we'd need multiple temperature samples
+            if beam_width > 1 and use_llm_correction:
+                # Generate alternative hypotheses using temperature sampling
+                st.caption("Debug: Generating alternative hypotheses...")
+                candidates.append({"text": full_text, "score": 1.0})
+
+                for i, temp in enumerate([0.2, 0.4, 0.6, 0.8, 1.0][:beam_width-1]):
+                    try:
+                        alt_segments, _ = model.transcribe(
+                            tmp_path,
+                            language=lang_code,
+                            beam_size=3,
+                            temperature=temp,
+                        )
+                        alt_text = " ".join([s.text for s in alt_segments]).strip()
+                        if alt_text and alt_text != full_text:
+                            candidates.append({"text": alt_text, "score": 1.0 - temp})
+                    except:
+                        pass
+            else:
+                candidates = [{"text": full_text, "score": 1.0}]
 
         else:  # MMS
             import librosa
@@ -329,7 +414,7 @@ def transcribe_audio(audio_data, file_ext=".wav"):
             st.caption(f"Debug: Audio loaded, shape={audio.shape}, sr={sr}")
 
             lang_code = LANGUAGE_CODES[language]["mms"]
-            st.info(f"Transcribing with: **{model_family}** | Language: **{language}** ({lang_code})")
+            st.info(f"Transcribing with: **{model_family}** | Language: **{language}** ({lang_code}) | Beam: {beam_width}")
             st.caption(f"Debug: Setting MMS language to {lang_code}...")
             mms_processor.tokenizer.set_target_lang(lang_code)
             mms_model.load_adapter(lang_code)
@@ -342,18 +427,45 @@ def transcribe_audio(audio_data, file_ext=".wav"):
             with torch.no_grad():
                 outputs = mms_model(**inputs).logits
 
-            ids = torch.argmax(outputs, dim=-1)[0]
-            full_text = mms_processor.decode(ids)
-            st.caption(f"Debug: Transcription complete, length={len(full_text)}")
+            # Get N-best candidates using beam search
+            if beam_width > 1 and use_llm_correction:
+                st.caption(f"Debug: Getting top-{beam_width} candidates with beam search...")
+                candidates = get_mms_nbest(outputs, mms_processor, beam_width=beam_width)
+            else:
+                ids = torch.argmax(outputs, dim=-1)[0]
+                full_text = mms_processor.decode(ids)
+                candidates = [{"text": full_text, "score": 1.0}]
+
+            full_text = candidates[0]["text"] if candidates else ""
+            st.caption(f"Debug: Transcription complete, {len(candidates)} candidates")
+
+        # Get the best candidate as primary result
+        full_text = candidates[0]["text"] if candidates else ""
 
         # Display results
-        st.subheader("Raw ASR Output")
-        st.text_area("Raw transcription", full_text, height=100, key="raw_output")
+        st.subheader("ASR Output")
+
+        # Show N-best candidates if available
+        if len(candidates) > 1:
+            with st.expander(f"Top-{len(candidates)} ASR Candidates", expanded=True):
+                for i, cand in enumerate(candidates):
+                    score_pct = cand['score'] * 100 if cand['score'] <= 1 else cand['score']
+                    st.write(f"**{i+1}.** {cand['text']}")
+                    st.caption(f"Score: {score_pct:.1f}")
+        else:
+            st.text_area("Raw transcription", full_text, height=100, key="raw_output")
 
         # LLM Correction
         if use_llm_correction and full_text:
+            candidate_texts = [c["text"] for c in candidates] if len(candidates) > 1 else None
+
             with st.spinner(f"Correcting with {llm_model}..."):
-                corrected_text, error = correct_with_llm(full_text, language, model_name=llm_model)
+                corrected_text, error = correct_with_llm(
+                    full_text,
+                    language,
+                    model_name=llm_model,
+                    n_best_candidates=candidate_texts
+                )
 
             if error:
                 st.warning(f"LLM correction failed: {error}")
@@ -366,7 +478,7 @@ def transcribe_audio(audio_data, file_ext=".wav"):
                 # Show diff if different
                 if corrected_text != full_text:
                     with st.expander("Show changes"):
-                        st.write("**Raw:**", full_text)
+                        st.write("**Raw (best):**", full_text)
                         st.write("**Corrected:**", corrected_text)
 
                 return corrected_text

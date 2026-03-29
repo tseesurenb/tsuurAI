@@ -1,6 +1,8 @@
 streamlit
 whisper-s2t
+faster-whisper
 transformers
 librosa
 sentencepiece
 openai
+pyctcdecode
