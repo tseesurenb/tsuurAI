@@ -130,6 +130,22 @@ with st.spinner(loading_msg):
         mms_processor, mms_model = load_mms_model()
         st.success("MMS ready for streaming!")
 
+def detect_repetition(text, min_pattern_len=2, max_pattern_len=20):
+    """Detect if text contains excessive repetition"""
+    if not text or len(text) < 10:
+        return False, text
+
+    # Check for repeating patterns
+    for pattern_len in range(min_pattern_len, min(max_pattern_len, len(text) // 3)):
+        pattern = text[:pattern_len]
+        if pattern * 3 in text:  # Pattern repeats at least 3 times
+            # Find where the repetition starts
+            repeat_count = text.count(pattern)
+            if repeat_count > 5:  # Too many repetitions
+                return True, pattern.strip()
+
+    return False, text
+
 def transcribe_chunk(audio_data):
     """Transcribe a single audio chunk"""
     import torch
@@ -154,6 +170,15 @@ def transcribe_chunk(audio_data):
             import librosa
             audio, sr = librosa.load(tmp_path, sr=16000)
 
+            # Check minimum audio length (at least 0.5 seconds of non-silence)
+            if len(audio) < sr * 0.5:
+                return "[Audio too short]"
+
+            # Check if audio is mostly silence
+            audio_energy = (audio ** 2).mean()
+            if audio_energy < 0.0001:
+                return "[No speech detected]"
+
             lang_code = LANGUAGE_CODES[language]["mms"]
             mms_processor.tokenizer.set_target_lang(lang_code)
             mms_model.load_adapter(lang_code)
@@ -166,6 +191,12 @@ def transcribe_chunk(audio_data):
 
             ids = torch.argmax(outputs, dim=-1)[0]
             text = mms_processor.decode(ids)
+
+        # Check for repetition loop (common ASR hallucination)
+        is_repetitive, cleaned_text = detect_repetition(text)
+        if is_repetitive:
+            st.warning(f"Detected repetitive output, cleaned: '{cleaned_text}'")
+            text = cleaned_text
 
         # Apply LLM correction if enabled
         if use_llm_correction and text and openai_client:

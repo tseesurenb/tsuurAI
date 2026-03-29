@@ -174,6 +174,21 @@ if use_llm_correction and use_local_llm and llm_model:
         local_llm_model, local_llm_tokenizer = load_local_llm(llm_model)
         st.success(f"Local LLM '{llm_model}' ready!")
 
+def detect_repetition(text, min_pattern_len=2, max_pattern_len=20):
+    """Detect if text contains excessive repetition (ASR hallucination)"""
+    if not text or len(text) < 10:
+        return False, text
+
+    # Check for repeating patterns
+    for pattern_len in range(min_pattern_len, min(max_pattern_len, len(text) // 3)):
+        pattern = text[:pattern_len]
+        if pattern * 3 in text:  # Pattern repeats at least 3 times
+            repeat_count = text.count(pattern)
+            if repeat_count > 5:  # Too many repetitions
+                return True, pattern.strip()
+
+    return False, text
+
 def transcribe_audio(audio_data, file_ext=".wav"):
     """Transcribe audio using selected model"""
     import torch
@@ -247,6 +262,14 @@ def transcribe_audio(audio_data, file_ext=".wav"):
             full_text = candidates[0]["text"] if candidates else ""
 
         full_text = candidates[0]["text"] if candidates else ""
+
+        # Check for repetition loop (common ASR hallucination)
+        is_repetitive, cleaned_text = detect_repetition(full_text)
+        if is_repetitive:
+            st.warning(f"Detected repetitive ASR output (hallucination). Original started with: '{full_text[:50]}...'")
+            full_text = cleaned_text
+            # Also clean candidates
+            candidates = [{"text": cleaned_text, "score": 1.0}]
 
         # Display results
         st.subheader("ASR Output")
