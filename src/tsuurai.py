@@ -92,6 +92,13 @@ def load_prompt(language, domains=None):
 
     return prompt if prompt else None
 
+def load_refinement_prompt(language):
+    """Load context refinement prompt (pass 2)"""
+    prompt_file = PROMPTS_DIR / f"{language.lower()}_context_refinement.md"
+    if prompt_file.exists():
+        return prompt_file.read_text()
+    return None
+
 # Local LLM models info
 LOCAL_LLM_INFO = {
     "Mongolian-Llama3": {
@@ -287,6 +294,92 @@ def correct_with_llm(raw_text, language, model_name="gpt-4o-mini", n_best_candid
     except Exception as e:
         return raw_text, str(e)
 
+def refine_with_llm(text, language, model_name="gpt-4o"):
+    """Pass 2: Context refinement using OpenAI"""
+    if not openai_client:
+        return text, "OpenAI key not found"
+
+    # Load refinement prompt
+    system_prompt = load_refinement_prompt(language)
+    if not system_prompt:
+        system_prompt = f"Review this {language} text and fix any words that don't fit the context."
+
+    prompt = f"""{system_prompt}
+
+## Text to refine:
+{text}
+
+## Refined text:"""
+
+    try:
+        if model_name.startswith("o1"):
+            response = openai_client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                max_completion_tokens=1000
+            )
+        else:
+            response = openai_client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,  # Lower temperature for refinement
+                max_tokens=1000
+            )
+        refined = response.choices[0].message.content.strip()
+        return refined, None
+    except Exception as e:
+        return text, str(e)
+
+def refine_with_local_llm(text, language, model, tokenizer):
+    """Pass 2: Context refinement using local LLM"""
+    import torch
+
+    # Load refinement prompt
+    system_prompt = load_refinement_prompt(language)
+    if not system_prompt:
+        system_prompt = f"Review this {language} text and fix any words that don't fit the context."
+
+    prompt = f"""{system_prompt}
+
+## Text to refine:
+{text}
+
+## Refined text:"""
+
+    try:
+        input_text = f"""<|begin_of_text|><|start_header_id|>user<|end_header_id|>
+
+{prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+"""
+        inputs = tokenizer(input_text, return_tensors="pt").to(model.device)
+
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=500,
+                temperature=0.2,
+                do_sample=True,
+                pad_token_id=tokenizer.eos_token_id,
+            )
+
+        full_response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+        if "<|eot_id|>" in full_response:
+            parts = full_response.split("assistant")
+            if len(parts) > 1:
+                refined = parts[-1].strip()
+            else:
+                refined = full_response.strip()
+        else:
+            refined = full_response.split(prompt)[-1].strip()
+
+        refined = refined.replace("<|eot_id|>", "").replace("<|end_of_text|>", "").strip()
+        return refined, None
+
+    except Exception as e:
+        return text, str(e)
+
 # Helper function to check if model exists
 def check_model_exists(model_key, model_size):
     if model_key == "whisper":
@@ -387,10 +480,16 @@ with st.sidebar:
         # Top-K candidates selection
         top_k = st.slider("Top-K candidates", min_value=1, max_value=10, value=5)
         st.caption(f"ASR will generate {top_k} candidates for LLM to choose from")
+
+        # Two-pass correction
+        use_two_pass = st.toggle("Two-pass correction", value=True)
+        if use_two_pass:
+            st.caption("Pass 1: Fix ASR errors → Pass 2: Context refinement")
     else:
         llm_model = None
         top_k = 1
         use_local_llm = False
+        use_two_pass = False
 
     st.divider()
 
@@ -662,10 +761,10 @@ def transcribe_audio(audio_data, file_ext=".wav"):
         if use_llm_correction and full_text:
             candidate_texts = [c["text"] for c in candidates] if len(candidates) > 1 else None
 
-            with st.spinner(f"Correcting with {llm_model}..."):
+            # Pass 1: ASR Error Correction
+            with st.spinner(f"Pass 1: Correcting ASR errors with {llm_model}..."):
                 if use_local_llm and local_llm_model is not None:
-                    # Use local LLM
-                    corrected_text, error = correct_with_local_llm(
+                    corrected_text, error1 = correct_with_local_llm(
                         full_text,
                         language,
                         local_llm_model,
@@ -673,35 +772,64 @@ def transcribe_audio(audio_data, file_ext=".wav"):
                         n_best_candidates=candidate_texts
                     )
                 else:
-                    # Use OpenAI API
-                    corrected_text, error = correct_with_llm(
+                    corrected_text, error1 = correct_with_llm(
                         full_text,
                         language,
                         model_name=llm_model,
                         n_best_candidates=candidate_texts
                     )
 
-            if error:
-                st.warning(f"LLM correction failed: {error}")
+            if error1:
+                st.warning(f"Pass 1 failed: {error1}")
+                corrected_text = full_text
+
+            # Pass 2: Context Refinement (if enabled)
+            final_text = corrected_text
+            error2 = None
+            if use_two_pass and corrected_text:
+                with st.spinner(f"Pass 2: Context refinement with {llm_model}..."):
+                    if use_local_llm and local_llm_model is not None:
+                        final_text, error2 = refine_with_local_llm(
+                            corrected_text,
+                            language,
+                            local_llm_model,
+                            local_llm_tokenizer
+                        )
+                    else:
+                        final_text, error2 = refine_with_llm(
+                            corrected_text,
+                            language,
+                            model_name=llm_model
+                        )
+
+                if error2:
+                    st.warning(f"Pass 2 failed: {error2}")
+                    final_text = corrected_text
+
+            # Display results
+            if error1 and error2:
                 st.subheader("Final Text")
                 st.text_area("Output", full_text, height=150, key="final_output")
             else:
                 st.subheader("LLM Corrected Output")
-                st.text_area("Corrected transcription", corrected_text, height=150, key="corrected_output")
+                st.text_area("Final transcription", final_text, height=150, key="corrected_output")
 
-                # Show diff if different
-                if corrected_text != full_text:
-                    with st.expander("Show changes"):
-                        st.write("**Raw (best):**", full_text)
-                        st.write("**Corrected:**", corrected_text)
+                # Show correction steps
+                with st.expander("Show correction steps"):
+                    st.write("**Raw ASR:**", full_text)
+                    if corrected_text != full_text:
+                        st.write("**Pass 1 (ASR fix):**", corrected_text)
+                    if use_two_pass and final_text != corrected_text:
+                        st.write("**Pass 2 (Context):**", final_text)
 
                 # Log usage
                 log_usage(st.session_state.get("user_email"), "transcription", {
                     "model": model_key,
                     "language": language,
-                    "llm_corrected": True
+                    "llm_corrected": True,
+                    "two_pass": use_two_pass
                 })
-                return corrected_text
+                return final_text
         else:
             st.subheader("Final Text")
             st.text_area("Output", full_text, height=150, key="final_output")
