@@ -1,0 +1,11 @@
+# Model cache - downloaded on first run
+models/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Temp files
+*.tmp
+*.temp

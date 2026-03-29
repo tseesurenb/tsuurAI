@@ -1,9 +1,20 @@
 import streamlit as st
 import tempfile
 import os
+from pathlib import Path
 from audio_recorder_streamlit import audio_recorder
 
 st.set_page_config(page_title="TsuurAI - Speech to Text", page_icon="🎤", layout="wide")
+
+# Setup persistent models directory
+SCRIPT_DIR = Path(__file__).parent.resolve()
+MODELS_DIR = SCRIPT_DIR / "models"
+MODELS_DIR.mkdir(exist_ok=True)
+
+# Set environment variables for model caching
+os.environ["HF_HOME"] = str(MODELS_DIR / "huggingface")
+os.environ["TRANSFORMERS_CACHE"] = str(MODELS_DIR / "huggingface")
+os.environ["XDG_CACHE_HOME"] = str(MODELS_DIR)
 
 st.title("🎤 TsuurAI - Speech to Text")
 st.write("Multi-model speech recognition on NVIDIA A2 GPU")
@@ -110,6 +121,13 @@ with st.sidebar:
 
     st.info(f"Quality: **{info['quality']}**")
 
+    # Show model download status
+    model_exists = check_model_exists(model_key, model_size)
+    if model_exists:
+        st.success("Status: Downloaded")
+    else:
+        st.warning("Status: Will download on first use")
+
     # Show model strengths/weaknesses
     comparison = MODEL_COMPARISON[model_key]
     st.success(f"Strength: {comparison['strength']}")
@@ -152,43 +170,90 @@ with st.sidebar:
         else:
             st.success("Best for: Speech translation, multilingual apps")
 
+    # Storage info
+    with st.expander("Storage Info"):
+        st.write(f"**Models folder:** `{MODELS_DIR}`")
+        if MODELS_DIR.exists():
+            # Calculate total size
+            total_size = sum(f.stat().st_size for f in MODELS_DIR.rglob('*') if f.is_file())
+            size_gb = total_size / (1024**3)
+            st.write(f"**Total cached:** {size_gb:.2f} GB")
+        st.caption("Models are downloaded once and reused")
+
+# Helper function to check if model exists
+def check_model_exists(model_key, model_size):
+    if model_key == "whisper":
+        whisper_cache = MODELS_DIR / "whisper" / model_size
+        return whisper_cache.exists() and any(whisper_cache.iterdir()) if whisper_cache.exists() else False
+    elif model_key == "meta_mms":
+        mms_cache = MODELS_DIR / "huggingface" / "hub" / "models--facebook--mms-1b-all"
+        return mms_cache.exists()
+    else:
+        seamless_cache = MODELS_DIR / "huggingface" / "hub" / "models--facebook--hf-seamless-m4t-medium"
+        return seamless_cache.exists()
+
 # Load model based on selection
 @st.cache_resource
 def load_whisper_model(model_id):
     import whisper_s2t
+    whisper_cache = MODELS_DIR / "whisper"
+    whisper_cache.mkdir(exist_ok=True)
+
     return whisper_s2t.load_model(
         model_identifier=model_id,
         backend='CTranslate2',
-        compute_type='float16'
+        compute_type='float16',
+        cache_dir=str(whisper_cache)
     )
 
 @st.cache_resource
 def load_mms_model():
     from transformers import Wav2Vec2ForCTC, AutoProcessor
-    processor = AutoProcessor.from_pretrained("facebook/mms-1b-all")
-    model = Wav2Vec2ForCTC.from_pretrained("facebook/mms-1b-all")
+    hf_cache = MODELS_DIR / "huggingface"
+    hf_cache.mkdir(exist_ok=True)
+
+    processor = AutoProcessor.from_pretrained(
+        "facebook/mms-1b-all",
+        cache_dir=str(hf_cache)
+    )
+    model = Wav2Vec2ForCTC.from_pretrained(
+        "facebook/mms-1b-all",
+        cache_dir=str(hf_cache)
+    )
     model = model.to("cuda")
     return processor, model
 
 @st.cache_resource
 def load_seamless_model():
     from transformers import AutoProcessor, SeamlessM4TModel
-    processor = AutoProcessor.from_pretrained("facebook/hf-seamless-m4t-medium")
-    model = SeamlessM4TModel.from_pretrained("facebook/hf-seamless-m4t-medium")
+    hf_cache = MODELS_DIR / "huggingface"
+    hf_cache.mkdir(exist_ok=True)
+
+    processor = AutoProcessor.from_pretrained(
+        "facebook/hf-seamless-m4t-medium",
+        cache_dir=str(hf_cache)
+    )
+    model = SeamlessM4TModel.from_pretrained(
+        "facebook/hf-seamless-m4t-medium",
+        cache_dir=str(hf_cache)
+    )
     model = model.to("cuda")
     return processor, model
 
 # Load selected model
-with st.spinner(f"Loading {model_size} model..."):
+model_exists = check_model_exists(model_key, model_size)
+loading_msg = f"Loading {model_size}..." if model_exists else f"Downloading & loading {model_size} (first time only)..."
+
+with st.spinner(loading_msg):
     if model_key == "whisper":
         model = load_whisper_model(model_size)
-        st.success(f"Whisper '{model_size}' loaded!")
+        st.success(f"Whisper '{model_size}' ready! (saved to models/whisper/)")
     elif model_key == "meta_mms":
         mms_processor, mms_model = load_mms_model()
-        st.success("Meta MMS model loaded!")
+        st.success("Meta MMS ready! (saved to models/huggingface/)")
     else:
         seamless_processor, seamless_model = load_seamless_model()
-        st.success("Meta SeamlessM4T model loaded!")
+        st.success("Meta SeamlessM4T ready! (saved to models/huggingface/)")
 
 def transcribe_audio(audio_data, file_ext=".wav"):
     import torch
