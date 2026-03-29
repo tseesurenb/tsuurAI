@@ -8,7 +8,11 @@ import sys
 from pathlib import Path
 
 # Add src to path
-sys.path.insert(0, str(Path(__file__).parent))
+SRC_DIR = Path(__file__).parent.resolve()
+sys.path.insert(0, str(SRC_DIR))
 
-# Import and run the stream app
-from stream.app import *
+# Run the stream app with correct __file__ set
+stream_app_path = SRC_DIR / "stream" / "app.py"
+stream_globals = globals().copy()
+stream_globals['__file__'] = str(stream_app_path)
+exec(compile(open(stream_app_path).read(), stream_app_path, 'exec'), stream_globals)

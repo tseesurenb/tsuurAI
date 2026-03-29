@@ -8,11 +8,12 @@ import tempfile
 import os
 import sys
 import time
-import queue
-import threading
+from pathlib import Path
 
 # Add parent directory to path for imports
-sys.path.insert(0, str(__file__).rsplit('/', 2)[0])
+SRC_DIR = Path(__file__).parent.parent.resolve()
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
 from common.config import (
     LANGUAGE_CODES, MODEL_INFO, LOCAL_LLM_INFO, API_LLM_INFO
