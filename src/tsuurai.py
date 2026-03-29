@@ -223,6 +223,7 @@ def transcribe_audio(audio_data, file_ext=".wav"):
     try:
         if model_key == "whisper":
             lang_code = LANGUAGE_CODES[language]["whisper"]
+            st.info(f"Transcribing with: **{model_family}** | Language: **{language}** ({lang_code})")
             result = model.transcribe_with_vad([tmp_path], lang_codes=[lang_code])
 
             st.subheader("Transcription")
@@ -231,11 +232,12 @@ def transcribe_audio(audio_data, file_ext=".wav"):
 
             full_text = " ".join([seg['text'] for seg in result[0]])
 
-        elif model_key == "meta_mms":
+        else:  # MMS
             import librosa
             audio, sr = librosa.load(tmp_path, sr=16000)
 
             lang_code = LANGUAGE_CODES[language]["mms"]
+            st.info(f"Transcribing with: **{model_family}** | Language: **{language}** ({lang_code})")
             mms_processor.tokenizer.set_target_lang(lang_code)
             mms_model.load_adapter(lang_code)
 
@@ -257,7 +259,10 @@ def transcribe_audio(audio_data, file_ext=".wav"):
     finally:
         os.unlink(tmp_path)
 
-# Main content - Tabs for input method
+# Main content - Show current settings
+st.markdown(f"**Current settings:** {model_family} ({model_size}) | Language: {language}")
+
+# Tabs for input method
 tab1, tab2 = st.tabs(["🎙️ Record", "📁 Upload"])
 
 with tab1:
@@ -283,9 +288,10 @@ with tab2:
     uploaded_file = st.file_uploader("Upload audio file", type=["wav", "mp3", "m4a", "flac", "ogg"])
 
     if uploaded_file:
+        st.success(f"File: **{uploaded_file.name}** ({uploaded_file.size / 1024:.1f} KB)")
         st.audio(uploaded_file)
         if st.button("Transcribe", type="primary", key="upload_btn"):
-            with st.spinner("Transcribing..."):
+            with st.spinner(f"Transcribing {uploaded_file.name}..."):
                 transcribe_audio(uploaded_file.getvalue(), os.path.splitext(uploaded_file.name)[1])
 
 st.divider()
