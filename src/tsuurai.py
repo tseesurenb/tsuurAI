@@ -44,6 +44,7 @@ def transcribe_audio(audio_data, file_ext=".wav"):
 
         full_text = " ".join([seg['text'] for seg in result[0]])
         st.text_area("Full Text", full_text, height=200)
+        return full_text
     finally:
         os.unlink(tmp_path)
 
@@ -51,19 +52,24 @@ def transcribe_audio(audio_data, file_ext=".wav"):
 tab1, tab2 = st.tabs(["🎙️ Record", "📁 Upload"])
 
 with tab1:
-    st.write("Click to start/stop recording")
+    st.write("Click microphone to start, click again to stop")
+
     audio_bytes = audio_recorder(
         text="",
         recording_color="#e74c3c",
         neutral_color="#3498db",
-        icon_size="3x"
+        icon_size="3x",
+        pause_threshold=3.0,
+        sample_rate=16000
     )
 
     if audio_bytes:
+        st.info(f"Audio captured: {len(audio_bytes)} bytes")
         st.audio(audio_bytes, format="audio/wav")
-        if st.button("Transcribe Recording", type="primary", key="rec_btn"):
-            with st.spinner("Transcribing..."):
-                transcribe_audio(audio_bytes)
+
+        # Auto-transcribe
+        with st.spinner("Transcribing..."):
+            transcribe_audio(audio_bytes)
 
 with tab2:
     uploaded_file = st.file_uploader("Upload audio file", type=["wav", "mp3", "m4a", "flac", "ogg"])
