@@ -72,12 +72,25 @@ LANGUAGE_CODES = {
 
 # Load correction prompts from files
 PROMPTS_DIR = SCRIPT_DIR / "prompts"
-def load_prompt(language):
-    """Load correction prompt from markdown file"""
+DOMAINS_DIR = PROMPTS_DIR / "domains"
+
+def load_prompt(language, domains=None):
+    """Load correction prompt from markdown file + domain prompts"""
+    # Load main language prompt
     prompt_file = PROMPTS_DIR / f"{language.lower()}_correction.md"
+    prompt = ""
     if prompt_file.exists():
-        return prompt_file.read_text()
-    return None
+        prompt = prompt_file.read_text()
+
+    # Load all domain prompts
+    if DOMAINS_DIR.exists():
+        domain_prompts = []
+        for domain_file in sorted(DOMAINS_DIR.glob("*.md")):
+            domain_prompts.append(domain_file.read_text())
+        if domain_prompts:
+            prompt += "\n\n# Domain-Specific Knowledge\n" + "\n\n".join(domain_prompts)
+
+    return prompt if prompt else None
 
 # Local LLM models info
 LOCAL_LLM_INFO = {
