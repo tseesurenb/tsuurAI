@@ -11,15 +11,15 @@ from pathlib import Path
 from datetime import datetime
 import bcrypt
 
+from .config import DATA_DIR
+
 # User database file
-SCRIPT_DIR = Path(__file__).parent.resolve()
-USERS_FILE = SCRIPT_DIR / "data" / "users.json"
-USAGE_FILE = SCRIPT_DIR / "data" / "usage.json"
+USERS_FILE = DATA_DIR / "users.json"
+USAGE_FILE = DATA_DIR / "usage.json"
 
 def init_data_dir():
     """Initialize data directory"""
-    data_dir = SCRIPT_DIR / "data"
-    data_dir.mkdir(exist_ok=True)
+    DATA_DIR.mkdir(exist_ok=True)
 
     if not USERS_FILE.exists():
         USERS_FILE.write_text(json.dumps({"users": {}}, indent=2))
