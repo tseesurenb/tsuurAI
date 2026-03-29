@@ -175,7 +175,7 @@ def load_local_llm(model_name):
 
     return model, tokenizer
 
-def correct_with_local_llm(raw_text, language, model, tokenizer, n_best_candidates=None):
+def correct_with_local_llm(raw_text, language, model, tokenizer, n_best_candidates=None, temperature=0.2):
     """Use local LLM to correct ASR output"""
     import torch
 
@@ -215,7 +215,7 @@ def correct_with_local_llm(raw_text, language, model, tokenizer, n_best_candidat
             outputs = model.generate(
                 **inputs,
                 max_new_tokens=500,
-                temperature=0.3,
+                temperature=temperature,
                 do_sample=True,
                 pad_token_id=tokenizer.eos_token_id,
             )
@@ -247,7 +247,7 @@ def correct_with_local_llm(raw_text, language, model, tokenizer, n_best_candidat
         return raw_text, str(e)
 
 # LLM Correction function (OpenAI API)
-def correct_with_llm(raw_text, language, model_name="gpt-4o-mini", n_best_candidates=None):
+def correct_with_llm(raw_text, language, model_name="gpt-4o-mini", n_best_candidates=None, temperature=0.2):
     """Use OpenAI LLM to correct ASR output"""
     if not openai_client:
         return raw_text, "OpenAI key not found"
@@ -286,7 +286,7 @@ def correct_with_llm(raw_text, language, model_name="gpt-4o-mini", n_best_candid
             response = openai_client.chat.completions.create(
                 model=model_name,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
+                temperature=temperature,
                 max_tokens=1000
             )
         corrected = response.choices[0].message.content.strip()
@@ -294,7 +294,7 @@ def correct_with_llm(raw_text, language, model_name="gpt-4o-mini", n_best_candid
     except Exception as e:
         return raw_text, str(e)
 
-def refine_with_llm(text, language, model_name="gpt-4o"):
+def refine_with_llm(text, language, model_name="gpt-4o", temperature=0.2):
     """Pass 2: Context refinement using OpenAI"""
     if not openai_client:
         return text, "OpenAI key not found"
@@ -322,7 +322,7 @@ def refine_with_llm(text, language, model_name="gpt-4o"):
             response = openai_client.chat.completions.create(
                 model=model_name,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,  # Lower temperature for refinement
+                temperature=temperature,
                 max_tokens=1000
             )
         refined = response.choices[0].message.content.strip()
@@ -330,7 +330,7 @@ def refine_with_llm(text, language, model_name="gpt-4o"):
     except Exception as e:
         return text, str(e)
 
-def refine_with_local_llm(text, language, model, tokenizer):
+def refine_with_local_llm(text, language, model, tokenizer, temperature=0.2):
     """Pass 2: Context refinement using local LLM"""
     import torch
 
@@ -358,7 +358,7 @@ def refine_with_local_llm(text, language, model, tokenizer):
             outputs = model.generate(
                 **inputs,
                 max_new_tokens=500,
-                temperature=0.2,
+                temperature=temperature,
                 do_sample=True,
                 pad_token_id=tokenizer.eos_token_id,
             )
@@ -485,11 +485,22 @@ with st.sidebar:
         use_two_pass = st.toggle("Two-pass correction", value=True)
         if use_two_pass:
             st.caption("Pass 1: Fix ASR errors → Pass 2: Context refinement")
+
+        # Temperature selection
+        temp_option = st.radio(
+            "Temperature",
+            ["Precise (0.2)", "Balanced (0.5)"],
+            index=0,
+            horizontal=True
+        )
+        llm_temperature = 0.2 if temp_option == "Precise (0.2)" else 0.5
+        st.caption("Lower = more consistent, Higher = more creative")
     else:
         llm_model = None
         top_k = 1
         use_local_llm = False
         use_two_pass = False
+        llm_temperature = 0.2
 
     st.divider()
 
@@ -769,14 +780,16 @@ def transcribe_audio(audio_data, file_ext=".wav"):
                         language,
                         local_llm_model,
                         local_llm_tokenizer,
-                        n_best_candidates=candidate_texts
+                        n_best_candidates=candidate_texts,
+                        temperature=llm_temperature
                     )
                 else:
                     corrected_text, error1 = correct_with_llm(
                         full_text,
                         language,
                         model_name=llm_model,
-                        n_best_candidates=candidate_texts
+                        n_best_candidates=candidate_texts,
+                        temperature=llm_temperature
                     )
 
             if error1:
@@ -793,13 +806,15 @@ def transcribe_audio(audio_data, file_ext=".wav"):
                             corrected_text,
                             language,
                             local_llm_model,
-                            local_llm_tokenizer
+                            local_llm_tokenizer,
+                            temperature=llm_temperature
                         )
                     else:
                         final_text, error2 = refine_with_llm(
                             corrected_text,
                             language,
-                            model_name=llm_model
+                            model_name=llm_model,
+                            temperature=llm_temperature
                         )
 
                 if error2:
