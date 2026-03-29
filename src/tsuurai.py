@@ -6,13 +6,11 @@ from openai import OpenAI
 
 st.set_page_config(page_title="TsuurAI - Speech to Text", page_icon="🎤", layout="wide")
 
-# Load OpenAI API key
-OPENAI_KEY_PATH = Path(__file__).parent.parent / "openai-key"
-if OPENAI_KEY_PATH.exists():
-    OPENAI_API_KEY = OPENAI_KEY_PATH.read_text().strip()
+# Load OpenAI API key from environment variable
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+if OPENAI_API_KEY:
     openai_client = OpenAI(api_key=OPENAI_API_KEY)
 else:
-    OPENAI_API_KEY = None
     openai_client = None
 
 # Setup persistent models directory
@@ -166,7 +164,7 @@ with st.sidebar:
             st.caption("ASR output will be corrected by GPT-4o-mini")
     else:
         use_llm_correction = False
-        st.warning("OpenAI key not found. Add 'openai-key' file to enable.")
+        st.warning("Set OPENAI_API_KEY environment variable to enable.")
 
     st.divider()
 
