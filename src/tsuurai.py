@@ -60,8 +60,8 @@ LANGUAGE_CODES = {
 }
 
 # LLM Correction function
-def correct_with_llm(raw_text, language, n_best_candidates=None):
-    """Use GPT-4o-mini to correct ASR output"""
+def correct_with_llm(raw_text, language, model_name="gpt-4o-mini", n_best_candidates=None):
+    """Use OpenAI LLM to correct ASR output"""
     if not openai_client:
         return raw_text, "OpenAI key not found"
 
@@ -95,12 +95,20 @@ Correct any errors in this {language} text. Fix:
 Return ONLY the corrected {language} text, nothing else."""
 
     try:
-        response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=1000
-        )
+        # o1 models don't support temperature
+        if model_name.startswith("o1"):
+            response = openai_client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                max_completion_tokens=1000
+            )
+        else:
+            response = openai_client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=1000
+            )
         corrected = response.choices[0].message.content.strip()
         return corrected, None
     except Exception as e:
@@ -159,11 +167,26 @@ with st.sidebar:
     # LLM Correction toggle
     st.header("LLM Correction")
     if openai_client:
-        use_llm_correction = st.toggle("Enable GPT-4o-mini correction", value=True)
+        use_llm_correction = st.toggle("Enable LLM correction", value=True)
         if use_llm_correction:
-            st.caption("ASR output will be corrected by GPT-4o-mini")
+            llm_model = st.selectbox(
+                "LLM Model",
+                ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "o1-mini", "o1"],
+                index=0
+            )
+            # Show model info
+            llm_info = {
+                "gpt-4o-mini": {"cost": "$0.15/$0.60 per 1M", "speed": "Very fast", "quality": "Good"},
+                "gpt-4o": {"cost": "$2.50/$10 per 1M", "speed": "Fast", "quality": "Excellent"},
+                "gpt-4-turbo": {"cost": "$10/$30 per 1M", "speed": "Medium", "quality": "Excellent"},
+                "o1-mini": {"cost": "$1.10/$4.40 per 1M", "speed": "Slower", "quality": "Best reasoning"},
+                "o1": {"cost": "$7.50/$30 per 1M", "speed": "Slow", "quality": "Most advanced"},
+            }
+            info = llm_info[llm_model]
+            st.caption(f"{info['quality']} | {info['speed']} | {info['cost']}")
     else:
         use_llm_correction = False
+        llm_model = None
         st.warning("Set OPENAI_API_KEY environment variable to enable.")
 
     st.divider()
@@ -329,8 +352,8 @@ def transcribe_audio(audio_data, file_ext=".wav"):
 
         # LLM Correction
         if use_llm_correction and full_text:
-            with st.spinner("Correcting with GPT-4o-mini..."):
-                corrected_text, error = correct_with_llm(full_text, language)
+            with st.spinner(f"Correcting with {llm_model}..."):
+                corrected_text, error = correct_with_llm(full_text, language, model_name=llm_model)
 
             if error:
                 st.warning(f"LLM correction failed: {error}")
