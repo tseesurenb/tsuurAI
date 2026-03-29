@@ -63,8 +63,9 @@ LANGUAGE_CODES = {
 # Helper function to check if model exists
 def check_model_exists(model_key, model_size):
     if model_key == "whisper":
-        whisper_cache = MODELS_DIR / "whisper" / model_size
-        return whisper_cache.exists() and any(whisper_cache.iterdir()) if whisper_cache.exists() else False
+        # Check in huggingface cache (whisper_s2t uses HF cache)
+        whisper_cache = MODELS_DIR / "huggingface" / "hub" / f"models--Systran--faster-whisper-{model_size}"
+        return whisper_cache.exists()
     elif model_key == "meta_mms":
         mms_cache = MODELS_DIR / "huggingface" / "hub" / "models--facebook--mms-1b-all"
         return mms_cache.exists()
@@ -196,14 +197,11 @@ with st.sidebar:
 @st.cache_resource
 def load_whisper_model(model_id):
     import whisper_s2t
-    whisper_cache = MODELS_DIR / "whisper"
-    whisper_cache.mkdir(exist_ok=True)
-
+    # whisper_s2t uses HF_HOME/XDG_CACHE_HOME env vars set at top of file
     return whisper_s2t.load_model(
         model_identifier=model_id,
         backend='CTranslate2',
-        compute_type='float16',
-        cache_dir=str(whisper_cache)
+        compute_type='float16'
     )
 
 @st.cache_resource
