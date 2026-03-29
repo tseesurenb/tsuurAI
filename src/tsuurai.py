@@ -31,9 +31,6 @@ MODEL_INFO = {
     "meta_mms": {
         "mms-1b-all": {"params": "1000M", "size_gb": 4.0, "speed": "~2x", "languages": 1162, "quality": "Great"},
     },
-    "meta_seamless": {
-        "seamlessM4T-medium": {"params": "1200M", "size_gb": 4.8, "speed": "~1.5x", "languages": 100, "quality": "Great"},
-    }
 }
 
 # Model comparison data
@@ -48,16 +45,11 @@ MODEL_COMPARISON = {
         "weakness": "Inconsistent quality",
         "best_for": "Rare/low-resource languages"
     },
-    "meta_seamless": {
-        "strength": "Most advanced, translation",
-        "weakness": "Less flexible",
-        "best_for": "Translation apps"
-    }
 }
 
 LANGUAGE_CODES = {
-    "English": {"whisper": "en", "mms": "eng", "seamless": "eng"},
-    "Mongolian": {"whisper": "mn", "mms": "mon", "seamless": "mon"},
+    "English": {"whisper": "en", "mms": "eng"},
+    "Mongolian": {"whisper": "mn", "mms": "mon"},
 }
 
 # Helper function to check if model exists
@@ -66,12 +58,9 @@ def check_model_exists(model_key, model_size):
         # Check in huggingface cache (whisper_s2t uses HF cache)
         whisper_cache = MODELS_DIR / "huggingface" / "hub" / f"models--Systran--faster-whisper-{model_size}"
         return whisper_cache.exists()
-    elif model_key == "meta_mms":
+    else:  # MMS
         mms_cache = MODELS_DIR / "huggingface" / "hub" / "models--facebook--mms-1b-all"
         return mms_cache.exists()
-    else:
-        seamless_cache = MODELS_DIR / "huggingface" / "hub" / "models--facebook--hf-seamless-m4t-medium"
-        return seamless_cache.exists()
 
 # Sidebar for model configuration
 with st.sidebar:
@@ -80,7 +69,7 @@ with st.sidebar:
     # Model family selection
     model_family = st.selectbox(
         "AI Model Family",
-        ["Whisper (OpenAI)", "MMS (Meta)", "SeamlessM4T (Meta)"],
+        ["Whisper (OpenAI)", "MMS (Meta)"],
         index=0
     )
 
@@ -92,18 +81,11 @@ with st.sidebar:
             ["tiny", "base", "small", "medium", "large-v3"],
             index=2
         )
-    elif model_family == "MMS (Meta)":
+    else:  # MMS (Meta)
         model_key = "meta_mms"
         model_size = st.selectbox(
             "Model Size",
             ["mms-1b-all"],
-            index=0
-        )
-    else:
-        model_key = "meta_seamless"
-        model_size = st.selectbox(
-            "Model Size",
-            ["seamlessM4T-medium"],
             index=0
         )
 
@@ -169,19 +151,16 @@ with st.sidebar:
 |-------|----------|----------|----------|
 | **Whisper** | Best zero-shot | Hard to fine-tune | Quick deployment |
 | **MMS** | 1162 languages | Inconsistent quality | Rare languages |
-| **SeamlessM4T** | Most advanced | Less flexible | Translation apps |
         """)
 
         # Contextual recommendation
         if model_key == "whisper":
             st.success("Recommended for: General use, English, quick setup")
-        elif model_key == "meta_mms":
+        else:  # MMS
             if language == "Mongolian":
                 st.success("Good choice for Mongolian - trained on 1100+ languages")
             else:
                 st.info("Better for rare languages. For English, consider Whisper.")
-        else:
-            st.success("Best for: Speech translation, multilingual apps")
 
     # Storage info
     with st.expander("Storage Info"):
@@ -221,23 +200,6 @@ def load_mms_model():
     model = model.to("cuda")
     return processor, model
 
-@st.cache_resource
-def load_seamless_model():
-    from transformers import AutoProcessor, SeamlessM4TModel
-    hf_cache = MODELS_DIR / "huggingface"
-    hf_cache.mkdir(exist_ok=True)
-
-    processor = AutoProcessor.from_pretrained(
-        "facebook/hf-seamless-m4t-medium",
-        cache_dir=str(hf_cache)
-    )
-    model = SeamlessM4TModel.from_pretrained(
-        "facebook/hf-seamless-m4t-medium",
-        cache_dir=str(hf_cache)
-    )
-    model = model.to("cuda")
-    return processor, model
-
 # Load selected model
 model_exists = check_model_exists(model_key, model_size)
 loading_msg = f"Loading {model_size}..." if model_exists else f"Downloading & loading {model_size} (first time only)..."
@@ -245,13 +207,10 @@ loading_msg = f"Loading {model_size}..." if model_exists else f"Downloading & lo
 with st.spinner(loading_msg):
     if model_key == "whisper":
         model = load_whisper_model(model_size)
-        st.success(f"Whisper '{model_size}' ready! (saved to models/whisper/)")
-    elif model_key == "meta_mms":
+        st.success(f"Whisper '{model_size}' ready! (saved to models/)")
+    else:  # MMS
         mms_processor, mms_model = load_mms_model()
         st.success("Meta MMS ready! (saved to models/huggingface/)")
-    else:
-        seamless_processor, seamless_model = load_seamless_model()
-        st.success("Meta SeamlessM4T ready! (saved to models/huggingface/)")
 
 def transcribe_audio(audio_data, file_ext=".wav"):
     import torch
@@ -288,22 +247,6 @@ def transcribe_audio(audio_data, file_ext=".wav"):
 
             ids = torch.argmax(outputs, dim=-1)[0]
             full_text = mms_processor.decode(ids)
-
-            st.subheader("Transcription")
-            st.write(full_text)
-
-        else:  # SeamlessM4T
-            import librosa
-            audio, sr = librosa.load(tmp_path, sr=16000)
-
-            lang_code = LANGUAGE_CODES[language]["seamless"]
-            inputs = seamless_processor(audios=audio, return_tensors="pt", sampling_rate=16000)
-            inputs = {k: v.to("cuda") for k, v in inputs.items()}
-
-            with torch.no_grad():
-                output_tokens = seamless_model.generate(**inputs, tgt_lang=lang_code, generate_speech=False)
-
-            full_text = seamless_processor.decode(output_tokens[0].tolist()[0], skip_special_tokens=True)
 
             st.subheader("Transcription")
             st.write(full_text)
