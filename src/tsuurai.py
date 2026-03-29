@@ -59,6 +59,15 @@ LANGUAGE_CODES = {
     "Mongolian": {"whisper": "mn", "mms": "mon"},
 }
 
+# Load correction prompts from files
+PROMPTS_DIR = SCRIPT_DIR / "prompts"
+def load_prompt(language):
+    """Load correction prompt from markdown file"""
+    prompt_file = PROMPTS_DIR / f"{language.lower()}_correction.md"
+    if prompt_file.exists():
+        return prompt_file.read_text()
+    return None
+
 # Local LLM models info
 LOCAL_LLM_INFO = {
     "Mongolian-Llama3": {
@@ -139,34 +148,27 @@ def correct_with_local_llm(raw_text, language, model, tokenizer, n_best_candidat
     """Use local LLM to correct ASR output"""
     import torch
 
+    # Load language-specific prompt from file
+    system_prompt = load_prompt(language)
+    if not system_prompt:
+        system_prompt = f"You are an expert {language} language corrector for speech recognition output."
+
     # Build prompt
     if n_best_candidates and len(n_best_candidates) > 1:
         candidates_text = "\n".join([f"{i+1}. {c}" for i, c in enumerate(n_best_candidates)])
-        prompt = f"""You are an expert {language} language corrector for speech recognition output.
+        prompt = f"""{system_prompt}
 
-Given these ASR candidates (ranked by confidence):
+## ASR Candidates (ranked by confidence):
 {candidates_text}
 
-Select the best candidate and correct any errors. Fix:
-- Spelling mistakes
-- Grammar issues
-- Word boundaries (words incorrectly split or merged)
-- Common ASR errors
-
-Return ONLY the corrected {language} text, nothing else."""
+## Correct the text now:"""
     else:
-        prompt = f"""You are an expert {language} language corrector for speech recognition output.
+        prompt = f"""{system_prompt}
 
-Raw ASR output:
+## ASR Output to correct:
 {raw_text}
 
-Correct any errors in this {language} text. Fix:
-- Spelling mistakes
-- Grammar issues
-- Word boundaries (words incorrectly split or merged)
-- Common ASR errors
-
-Return ONLY the corrected {language} text, nothing else."""
+## Corrected text:"""
 
     try:
         # Format prompt - use simple format that works with most models
@@ -219,34 +221,27 @@ def correct_with_llm(raw_text, language, model_name="gpt-4o-mini", n_best_candid
     if not openai_client:
         return raw_text, "OpenAI key not found"
 
+    # Load language-specific prompt from file
+    system_prompt = load_prompt(language)
+    if not system_prompt:
+        system_prompt = f"You are an expert {language} language corrector for speech recognition output."
+
     # Build prompt based on whether we have N-best candidates
     if n_best_candidates and len(n_best_candidates) > 1:
         candidates_text = "\n".join([f"{i+1}. {c}" for i, c in enumerate(n_best_candidates)])
-        prompt = f"""You are an expert {language} language corrector for speech recognition output.
+        prompt = f"""{system_prompt}
 
-Given these ASR candidates (ranked by confidence):
+## ASR Candidates (ranked by confidence):
 {candidates_text}
 
-Select the best candidate and correct any errors. Fix:
-- Spelling mistakes
-- Grammar issues
-- Word boundaries (words incorrectly split or merged)
-- Common ASR errors
-
-Return ONLY the corrected {language} text, nothing else."""
+## Correct the text now:"""
     else:
-        prompt = f"""You are an expert {language} language corrector for speech recognition output.
+        prompt = f"""{system_prompt}
 
-Raw ASR output:
+## ASR Output to correct:
 {raw_text}
 
-Correct any errors in this {language} text. Fix:
-- Spelling mistakes
-- Grammar issues
-- Word boundaries (words incorrectly split or merged)
-- Common ASR errors
-
-Return ONLY the corrected {language} text, nothing else."""
+## Corrected text:"""
 
     try:
         # o1 models don't support temperature
