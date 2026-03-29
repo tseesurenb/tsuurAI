@@ -1,14 +1,16 @@
 """
 TsuurAI Real-time Streaming App
-True real-time speech-to-text using WebRTC
+Continuous speech-to-text transcription
 """
 
 import streamlit as st
 import numpy as np
-import queue
+import tempfile
 import time
 import sys
+import os
 from pathlib import Path
+import io
 
 # Add parent directory to path for imports
 SRC_DIR = Path(__file__).parent.parent.resolve()
@@ -16,17 +18,16 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from common.config import LANGUAGE_CODES, MODEL_INFO, API_LLM_INFO
-from common.models import check_model_exists, load_whisper_model
+from common.models import load_whisper_model
 from common.llm import openai_client, correct_with_llm
 from common.auth import show_login_page, show_user_sidebar, log_usage
 
-# Check for streamlit-webrtc
+# Try to import audio recorder
 try:
-    from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
-    import av
-    WEBRTC_AVAILABLE = True
+    from audio_recorder_streamlit import audio_recorder
+    RECORDER_AVAILABLE = True
 except ImportError:
-    WEBRTC_AVAILABLE = False
+    RECORDER_AVAILABLE = False
 
 st.set_page_config(page_title="TsuurAI - Real-time", page_icon="🎙️", layout="wide")
 
@@ -36,26 +37,24 @@ if not st.session_state.get("authenticated"):
     st.stop()
 
 st.title("🎙️ TsuurAI - Real-time Transcription")
-st.write("Continuous speech-to-text as you speak")
+
+if not RECORDER_AVAILABLE:
+    st.warning("For best experience, install audio-recorder-streamlit:")
+    st.code("pip install audio-recorder-streamlit")
+    st.info("Falling back to standard audio input mode")
 
 # Show user info in sidebar
 show_user_sidebar()
-
-if not WEBRTC_AVAILABLE:
-    st.error("streamlit-webrtc not installed. Run:")
-    st.code("pip install streamlit-webrtc av")
-    st.stop()
 
 # Sidebar configuration
 with st.sidebar:
     st.header("Model Configuration")
 
-    # For real-time, only use fast Whisper models
     model_size = st.selectbox(
         "Whisper Model",
         ["tiny", "base", "small"],
-        index=1,
-        help="Smaller = faster, better for real-time"
+        index=0,
+        help="tiny = fastest (~1s), base = balanced, small = best quality"
     )
 
     language = st.selectbox(
@@ -65,229 +64,226 @@ with st.sidebar:
     )
 
     st.divider()
+    st.header("Settings")
 
-    st.header("Real-time Settings")
-
-    vad_threshold = st.slider(
-        "VAD Sensitivity",
-        min_value=0.01,
-        max_value=0.1,
-        value=0.03,
-        help="Lower = more sensitive to speech"
-    )
-
-    min_speech_duration = st.slider(
-        "Min speech duration (sec)",
-        min_value=0.5,
-        max_value=3.0,
-        value=1.0,
-        help="Minimum audio length before processing"
-    )
+    auto_transcribe = st.toggle("Auto-transcribe", value=True, help="Automatically transcribe when recording stops")
 
     use_llm = st.toggle("LLM Correction", value=False)
     if use_llm:
         llm_model = st.selectbox("LLM", list(API_LLM_INFO.keys()), index=1)
-        st.caption("Adds ~0.5s latency")
     else:
         llm_model = None
 
     st.divider()
-
     info = MODEL_INFO["whisper"][model_size]
     st.metric("Speed", info["speed"])
     st.metric("Quality", info["quality"])
 
-# Load Whisper model
-model_exists = check_model_exists("whisper", model_size)
-loading_msg = f"Loading Whisper {model_size}..." if model_exists else f"Downloading Whisper {model_size}..."
+# Load model
+@st.cache_resource
+def get_whisper(size):
+    return load_whisper_model(size)
 
-with st.spinner(loading_msg):
-    whisper_model = load_whisper_model(model_size)
-    st.success(f"Whisper '{model_size}' ready for real-time!")
+with st.spinner(f"Loading Whisper {model_size}..."):
+    whisper_model = get_whisper(model_size)
+    st.success(f"Whisper {model_size} ready!")
 
 # Initialize session state
-if "realtime_transcript" not in st.session_state:
-    st.session_state.realtime_transcript = []
-if "audio_buffer" not in st.session_state:
-    st.session_state.audio_buffer = []
+if "transcripts" not in st.session_state:
+    st.session_state.transcripts = []
+if "last_audio_hash" not in st.session_state:
+    st.session_state.last_audio_hash = None
 
-# Audio processor class for WebRTC
-class AudioProcessor(AudioProcessorBase):
-    def __init__(self):
-        self.audio_queue = queue.Queue()
-        self.sample_rate = 16000
+def transcribe_audio(audio_bytes):
+    """Transcribe audio bytes"""
+    try:
+        # Save to temp file
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
 
-    def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
-        # Convert to numpy array
-        audio = frame.to_ndarray()
+        # Transcribe
+        lang_code = LANGUAGE_CODES[language]["whisper"]
+        segments, _ = whisper_model.transcribe(
+            tmp_path,
+            language=lang_code,
+            beam_size=1,
+            temperature=0.0,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=300)
+        )
 
-        # Convert to mono if stereo
-        if len(audio.shape) > 1:
-            audio = audio.mean(axis=0)
+        text = " ".join([s.text for s in segments]).strip()
 
-        # Resample to 16kHz if needed
-        if frame.sample_rate != self.sample_rate:
-            # Simple resampling (for production, use librosa)
-            ratio = self.sample_rate / frame.sample_rate
-            new_length = int(len(audio) * ratio)
-            indices = np.linspace(0, len(audio) - 1, new_length).astype(int)
-            audio = audio[indices]
+        # Clean up temp file
+        os.unlink(tmp_path)
 
-        # Normalize
-        audio = audio.astype(np.float32)
-        if audio.max() > 1.0:
-            audio = audio / 32768.0
+        # Check for repetition
+        if text and len(text) > 20:
+            for plen in range(3, 15):
+                pattern = text[:plen]
+                if text.count(pattern) > 4:
+                    text = pattern.strip()
+                    break
 
-        # Put in queue for processing
-        self.audio_queue.put(audio)
+        # LLM correction
+        if use_llm and openai_client and text:
+            with st.spinner("LLM correcting..."):
+                corrected, _ = correct_with_llm(text, language, model_name=llm_model, temperature=0.2)
+                if corrected:
+                    text = corrected
 
-        return frame
+        return text, None
 
-# Create columns for layout
+    except Exception as e:
+        return None, str(e)
+
+# Main area
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    st.subheader("Live Transcription")
+    st.subheader("Recording")
 
-    # WebRTC streamer
-    webrtc_ctx = webrtc_streamer(
-        key="speech-to-text",
-        mode=WebRtcMode.SENDONLY,
-        audio_receiver_size=1024,
-        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-        media_stream_constraints={"video": False, "audio": True},
-    )
+    if RECORDER_AVAILABLE:
+        # Use audio recorder component - allows continuous recording
+        st.write("🎤 Click to start/stop recording")
 
-    # Transcription display
-    transcript_container = st.container()
+        audio_bytes = audio_recorder(
+            text="",
+            recording_color="#e74c3c",
+            neutral_color="#3498db",
+            icon_name="microphone",
+            icon_size="3x",
+            pause_threshold=2.0,  # Auto-stop after 2s silence
+            sample_rate=16000
+        )
 
-    with transcript_container:
-        if st.session_state.realtime_transcript:
-            full_text = " ".join(st.session_state.realtime_transcript)
-            st.text_area(
-                "Transcript",
-                full_text,
-                height=300,
-                key="live_transcript_display"
-            )
-        else:
-            st.info("Click START above to begin real-time transcription")
+        if audio_bytes:
+            # Check if this is new audio
+            audio_hash = hash(audio_bytes)
+            if audio_hash != st.session_state.last_audio_hash:
+                st.session_state.last_audio_hash = audio_hash
+                st.audio(audio_bytes, format="audio/wav")
+
+                if auto_transcribe:
+                    with st.spinner("Transcribing..."):
+                        start = time.time()
+                        text, error = transcribe_audio(audio_bytes)
+                        elapsed = time.time() - start
+
+                    if error:
+                        st.error(f"Error: {error}")
+                    elif text:
+                        st.session_state.transcripts.append(text)
+                        st.success(f"✓ ({elapsed:.1f}s) {text}")
+                        log_usage(st.session_state.get("user_email"), "realtime", {
+                            "model": model_size, "language": language
+                        })
+                        st.rerun()
+                    else:
+                        st.warning("No speech detected")
+                else:
+                    if st.button("Transcribe", type="primary"):
+                        with st.spinner("Transcribing..."):
+                            text, error = transcribe_audio(audio_bytes)
+                        if error:
+                            st.error(f"Error: {error}")
+                        elif text:
+                            st.session_state.transcripts.append(text)
+                            st.success(f"✓ {text}")
+                            st.rerun()
+    else:
+        # Fallback to standard audio input
+        st.write("Record audio and it will be transcribed automatically")
+
+        audio_value = st.audio_input("Click to record", key="recorder")
+
+        if audio_value:
+            audio_bytes = audio_value.getvalue()
+            audio_hash = hash(audio_bytes)
+
+            if audio_hash != st.session_state.last_audio_hash:
+                st.session_state.last_audio_hash = audio_hash
+                st.audio(audio_value)
+
+                if auto_transcribe:
+                    with st.spinner("Transcribing..."):
+                        start = time.time()
+                        text, error = transcribe_audio(audio_bytes)
+                        elapsed = time.time() - start
+
+                    if error:
+                        st.error(f"Error: {error}")
+                    elif text:
+                        st.session_state.transcripts.append(text)
+                        st.success(f"✓ ({elapsed:.1f}s) {text}")
+                        st.rerun()
+                else:
+                    if st.button("Transcribe", type="primary"):
+                        with st.spinner("Transcribing..."):
+                            text, error = transcribe_audio(audio_bytes)
+                        if text:
+                            st.session_state.transcripts.append(text)
+                            st.rerun()
 
 with col2:
-    st.subheader("Controls")
+    st.subheader("Status")
+    st.metric("Segments", len(st.session_state.transcripts))
 
-    if st.button("Clear Transcript", use_container_width=True):
-        st.session_state.realtime_transcript = []
-        st.rerun()
+    if st.session_state.transcripts:
+        total_words = len(" ".join(st.session_state.transcripts).split())
+        st.metric("Words", total_words)
 
-    if st.session_state.realtime_transcript:
-        full_text = " ".join(st.session_state.realtime_transcript)
+st.divider()
+
+# Transcript display
+st.subheader("Full Transcript")
+
+if st.session_state.transcripts:
+    full_text = " ".join(st.session_state.transcripts)
+    st.text_area("Transcript", full_text, height=200, key="full_transcript")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        if st.button("Clear All", use_container_width=True):
+            st.session_state.transcripts = []
+            st.session_state.last_audio_hash = None
+            st.rerun()
+
+    with col2:
         st.download_button(
             "Download",
             full_text,
-            file_name="realtime_transcript.txt",
+            file_name="transcript.txt",
             use_container_width=True
         )
 
-        word_count = len(full_text.split())
-        st.metric("Words", word_count)
-
-    st.divider()
-    st.subheader("Status")
-
-    if webrtc_ctx.state.playing:
-        st.success("🔴 Recording...")
-    else:
-        st.info("⏸️ Stopped")
-
-# Process audio in real-time
-if webrtc_ctx.state.playing and webrtc_ctx.audio_receiver:
-    st.info("Processing audio stream...")
-
-    audio_buffer = []
-    buffer_duration = 0
-    sample_rate = 16000
-
-    status_placeholder = st.empty()
-    result_placeholder = st.empty()
-
-    while webrtc_ctx.state.playing:
-        try:
-            # Get audio frames
-            audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=0.1)
-
-            for frame in audio_frames:
-                # Convert to numpy
-                audio = frame.to_ndarray()
-                if len(audio.shape) > 1:
-                    audio = audio.mean(axis=0)
-
-                audio = audio.astype(np.float32)
-                if audio.max() > 1.0:
-                    audio = audio / 32768.0
-
-                audio_buffer.extend(audio.tolist())
-                buffer_duration = len(audio_buffer) / sample_rate
-
-            # Check if we have enough audio
-            if buffer_duration >= min_speech_duration:
-                audio_np = np.array(audio_buffer, dtype=np.float32)
-
-                # Simple VAD - check energy
-                energy = (audio_np ** 2).mean()
-
-                if energy > vad_threshold:
-                    status_placeholder.info(f"Processing {buffer_duration:.1f}s of audio...")
-
-                    # Transcribe
-                    import tempfile
-                    import soundfile as sf
-
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                        sf.write(tmp.name, audio_np, sample_rate)
-
-                        lang_code = LANGUAGE_CODES[language]["whisper"]
-                        segments, _ = whisper_model.transcribe(
-                            tmp.name,
-                            language=lang_code,
-                            beam_size=1,  # Fast
-                            temperature=0.0,
-                            vad_filter=True
-                        )
-
-                        text = " ".join([s.text for s in segments]).strip()
-
-                        if text:
-                            # LLM correction if enabled
-                            if use_llm and openai_client:
-                                corrected, _ = correct_with_llm(
-                                    text, language, model_name=llm_model, temperature=0.2
-                                )
-                                if corrected:
-                                    text = corrected
-
-                            st.session_state.realtime_transcript.append(text)
-                            result_placeholder.success(f"✓ {text}")
-
-                            log_usage(st.session_state.get("user_email"), "realtime_transcription", {
-                                "model": model_size,
-                                "language": language,
-                                "duration": buffer_duration
-                            })
-                else:
-                    status_placeholder.caption("Waiting for speech...")
-
-                # Clear buffer
-                audio_buffer = []
-                buffer_duration = 0
-
-        except queue.Empty:
-            continue
-        except Exception as e:
-            st.error(f"Error: {e}")
-            break
-
-        time.sleep(0.05)
+    with col3:
+        if st.button("Copy (show)", use_container_width=True):
+            st.code(full_text)
+else:
+    st.info("Start recording to see transcription here")
 
 st.divider()
-st.caption("TsuurAI Real-time Mode - Powered by Whisper + WebRTC")
+
+# Tips
+with st.expander("Tips for best results"):
+    st.markdown("""
+    **For fastest transcription:**
+    - Use **Whisper tiny** model (~1 second processing)
+    - Disable LLM correction
+    - Speak clearly and close to microphone
+
+    **For best accuracy:**
+    - Use **Whisper small** model
+    - Enable LLM correction
+    - Record in quiet environment
+
+    **Recording tips:**
+    - Wait for red indicator before speaking
+    - Pause briefly between sentences
+    - Auto-stop triggers after 2 seconds of silence
+    """)
+
+st.caption("TsuurAI Real-time | Whisper")
