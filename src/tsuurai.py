@@ -60,6 +60,18 @@ LANGUAGE_CODES = {
     "Mongolian": {"whisper": "mn", "mms": "mon", "seamless": "mon"},
 }
 
+# Helper function to check if model exists
+def check_model_exists(model_key, model_size):
+    if model_key == "whisper":
+        whisper_cache = MODELS_DIR / "whisper" / model_size
+        return whisper_cache.exists() and any(whisper_cache.iterdir()) if whisper_cache.exists() else False
+    elif model_key == "meta_mms":
+        mms_cache = MODELS_DIR / "huggingface" / "hub" / "models--facebook--mms-1b-all"
+        return mms_cache.exists()
+    else:
+        seamless_cache = MODELS_DIR / "huggingface" / "hub" / "models--facebook--hf-seamless-m4t-medium"
+        return seamless_cache.exists()
+
 # Sidebar for model configuration
 with st.sidebar:
     st.header("Model Configuration")
@@ -179,18 +191,6 @@ with st.sidebar:
             size_gb = total_size / (1024**3)
             st.write(f"**Total cached:** {size_gb:.2f} GB")
         st.caption("Models are downloaded once and reused")
-
-# Helper function to check if model exists
-def check_model_exists(model_key, model_size):
-    if model_key == "whisper":
-        whisper_cache = MODELS_DIR / "whisper" / model_size
-        return whisper_cache.exists() and any(whisper_cache.iterdir()) if whisper_cache.exists() else False
-    elif model_key == "meta_mms":
-        mms_cache = MODELS_DIR / "huggingface" / "hub" / "models--facebook--mms-1b-all"
-        return mms_cache.exists()
-    else:
-        seamless_cache = MODELS_DIR / "huggingface" / "hub" / "models--facebook--hf-seamless-m4t-medium"
-        return seamless_cache.exists()
 
 # Load model based on selection
 @st.cache_resource
