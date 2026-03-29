@@ -2,6 +2,7 @@ import streamlit as st
 import whisper_s2t
 import tempfile
 import os
+from audio_recorder_streamlit import audio_recorder
 
 st.set_page_config(page_title="Speech to Text", page_icon="🎤", layout="wide")
 
@@ -29,9 +30,6 @@ with st.spinner(f"Loading {model_size} model..."):
 
 st.success(f"Model '{model_size}' loaded!")
 
-# Tabs for input method
-tab1, tab2 = st.tabs(["🎙️ Record", "📁 Upload"])
-
 def transcribe_audio(audio_data, file_ext=".wav"):
     with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
         tmp.write(audio_data)
@@ -49,15 +47,23 @@ def transcribe_audio(audio_data, file_ext=".wav"):
     finally:
         os.unlink(tmp_path)
 
-with tab1:
-    st.write("Click the microphone to start recording")
-    audio_value = st.audio_input("Record your voice")
+# Tabs for input method
+tab1, tab2 = st.tabs(["🎙️ Record", "📁 Upload"])
 
-    if audio_value:
-        st.audio(audio_value)
+with tab1:
+    st.write("Click to start/stop recording")
+    audio_bytes = audio_recorder(
+        text="",
+        recording_color="#e74c3c",
+        neutral_color="#3498db",
+        icon_size="3x"
+    )
+
+    if audio_bytes:
+        st.audio(audio_bytes, format="audio/wav")
         if st.button("Transcribe Recording", type="primary", key="rec_btn"):
             with st.spinner("Transcribing..."):
-                transcribe_audio(audio_value.getvalue())
+                transcribe_audio(audio_bytes)
 
 with tab2:
     uploaded_file = st.file_uploader("Upload audio file", type=["wav", "mp3", "m4a", "flac", "ogg"])

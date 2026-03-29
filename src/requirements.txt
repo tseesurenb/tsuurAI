@@ -1,2 +1,3 @@
 streamlit
 whisper-s2t
+audio-recorder-streamlit
