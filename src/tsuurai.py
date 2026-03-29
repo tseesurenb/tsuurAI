@@ -2,8 +2,18 @@ import streamlit as st
 import tempfile
 import os
 from pathlib import Path
+from openai import OpenAI
 
 st.set_page_config(page_title="TsuurAI - Speech to Text", page_icon="🎤", layout="wide")
+
+# Load OpenAI API key
+OPENAI_KEY_PATH = Path(__file__).parent.parent / "openai-key"
+if OPENAI_KEY_PATH.exists():
+    OPENAI_API_KEY = OPENAI_KEY_PATH.read_text().strip()
+    openai_client = OpenAI(api_key=OPENAI_API_KEY)
+else:
+    OPENAI_API_KEY = None
+    openai_client = None
 
 # Setup persistent models directory
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -50,6 +60,53 @@ LANGUAGE_CODES = {
     "English": {"whisper": "en", "mms": "eng"},
     "Mongolian": {"whisper": "mn", "mms": "mon"},
 }
+
+# LLM Correction function
+def correct_with_llm(raw_text, language, n_best_candidates=None):
+    """Use GPT-4o-mini to correct ASR output"""
+    if not openai_client:
+        return raw_text, "OpenAI key not found"
+
+    # Build prompt based on whether we have N-best candidates
+    if n_best_candidates and len(n_best_candidates) > 1:
+        candidates_text = "\n".join([f"{i+1}. {c}" for i, c in enumerate(n_best_candidates)])
+        prompt = f"""You are an expert {language} language corrector for speech recognition output.
+
+Given these ASR candidates (ranked by confidence):
+{candidates_text}
+
+Select the best candidate and correct any errors. Fix:
+- Spelling mistakes
+- Grammar issues
+- Word boundaries (words incorrectly split or merged)
+- Common ASR errors
+
+Return ONLY the corrected {language} text, nothing else."""
+    else:
+        prompt = f"""You are an expert {language} language corrector for speech recognition output.
+
+Raw ASR output:
+{raw_text}
+
+Correct any errors in this {language} text. Fix:
+- Spelling mistakes
+- Grammar issues
+- Word boundaries (words incorrectly split or merged)
+- Common ASR errors
+
+Return ONLY the corrected {language} text, nothing else."""
+
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=1000
+        )
+        corrected = response.choices[0].message.content.strip()
+        return corrected, None
+    except Exception as e:
+        return raw_text, str(e)
 
 # Helper function to check if model exists
 def check_model_exists(model_key, model_size):
@@ -98,6 +155,18 @@ with st.sidebar:
     # Language-specific recommendation
     if language == "Mongolian":
         st.caption("For Mongolian: MMS has best coverage, Whisper is fastest")
+
+    st.divider()
+
+    # LLM Correction toggle
+    st.header("LLM Correction")
+    if openai_client:
+        use_llm_correction = st.toggle("Enable GPT-4o-mini correction", value=True)
+        if use_llm_correction:
+            st.caption("ASR output will be corrected by GPT-4o-mini")
+    else:
+        use_llm_correction = False
+        st.warning("OpenAI key not found. Add 'openai-key' file to enable.")
 
     st.divider()
 
@@ -230,10 +299,6 @@ def transcribe_audio(audio_data, file_ext=".wav"):
             result = model.transcribe_with_vad([tmp_path], lang_codes=[lang_code])
             st.caption(f"Debug: Whisper returned {len(result)} results")
 
-            st.subheader("Transcription")
-            for segment in result[0]:
-                st.write(segment['text'])
-
             full_text = " ".join([seg['text'] for seg in result[0]])
 
         else:  # MMS
@@ -260,10 +325,34 @@ def transcribe_audio(audio_data, file_ext=".wav"):
             full_text = mms_processor.decode(ids)
             st.caption(f"Debug: Transcription complete, length={len(full_text)}")
 
-            st.subheader("Transcription")
-            st.write(full_text)
+        # Display results
+        st.subheader("Raw ASR Output")
+        st.text_area("Raw transcription", full_text, height=100, key="raw_output")
 
-        st.text_area("Full Text", full_text, height=150)
+        # LLM Correction
+        if use_llm_correction and full_text:
+            with st.spinner("Correcting with GPT-4o-mini..."):
+                corrected_text, error = correct_with_llm(full_text, language)
+
+            if error:
+                st.warning(f"LLM correction failed: {error}")
+                st.subheader("Final Text")
+                st.text_area("Output", full_text, height=150, key="final_output")
+            else:
+                st.subheader("LLM Corrected Output")
+                st.text_area("Corrected transcription", corrected_text, height=150, key="corrected_output")
+
+                # Show diff if different
+                if corrected_text != full_text:
+                    with st.expander("Show changes"):
+                        st.write("**Raw:**", full_text)
+                        st.write("**Corrected:**", corrected_text)
+
+                return corrected_text
+        else:
+            st.subheader("Final Text")
+            st.text_area("Output", full_text, height=150, key="final_output")
+
         return full_text
 
     except Exception as e:

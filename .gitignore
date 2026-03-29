@@ -1,0 +1,24 @@
+# API keys - NEVER commit
+openai-key
+*.key
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+venv/
+
+# Model cache
+models/
+src/models/
+
+# SSL certs
+*.pem
+
+# Temp files
+*.tmp
+*.temp
+
+# OS files
+.DS_Store

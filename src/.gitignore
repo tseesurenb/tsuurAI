@@ -9,3 +9,8 @@ __pycache__/
 # Temp files
 *.tmp
 *.temp
+
+# API keys
+openai-key
+*.key
+.env

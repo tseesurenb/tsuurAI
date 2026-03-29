@@ -3,3 +3,4 @@ whisper-s2t
 transformers
 librosa
 sentencepiece
+openai
