@@ -2,7 +2,6 @@ import streamlit as st
 import tempfile
 import os
 from pathlib import Path
-from audio_recorder_streamlit import audio_recorder
 
 st.set_page_config(page_title="TsuurAI - Speech to Text", page_icon="🎤", layout="wide")
 
@@ -263,26 +262,21 @@ def transcribe_audio(audio_data, file_ext=".wav"):
 st.markdown(f"**Current settings:** {model_family} ({model_size}) | Language: {language}")
 
 # Tabs for input method
-tab1, tab2 = st.tabs(["🎙️ Record", "📁 Upload"])
+tab1, tab2 = st.tabs(["🎙️ Record", "📁 Upload File"])
 
 with tab1:
-    st.write("Click microphone to start, click again to stop")
+    st.write("Click the microphone button to record your voice")
 
-    audio_bytes = audio_recorder(
-        text="",
-        recording_color="#e74c3c",
-        neutral_color="#3498db",
-        icon_size="3x",
-        pause_threshold=3.0,
-        sample_rate=16000
-    )
+    # Use Streamlit's built-in audio input
+    audio_value = st.audio_input("Record audio", key="audio_recorder")
 
-    if audio_bytes:
-        st.info(f"Audio captured: {len(audio_bytes)} bytes")
-        st.audio(audio_bytes, format="audio/wav")
+    if audio_value:
+        st.success(f"Recording captured: {len(audio_value.getvalue()) / 1024:.1f} KB")
+        st.audio(audio_value)
 
-        with st.spinner("Transcribing..."):
-            transcribe_audio(audio_bytes)
+        if st.button("Transcribe Recording", type="primary", key="transcribe_rec"):
+            with st.spinner("Transcribing recording..."):
+                transcribe_audio(audio_value.getvalue(), ".wav")
 
 with tab2:
     uploaded_file = st.file_uploader("Upload audio file", type=["wav", "mp3", "m4a", "flac", "ogg"])
@@ -290,7 +284,7 @@ with tab2:
     if uploaded_file:
         st.success(f"File: **{uploaded_file.name}** ({uploaded_file.size / 1024:.1f} KB)")
         st.audio(uploaded_file)
-        if st.button("Transcribe", type="primary", key="upload_btn"):
+        if st.button("Transcribe File", type="primary", key="transcribe_file"):
             with st.spinner(f"Transcribing {uploaded_file.name}..."):
                 transcribe_audio(uploaded_file.getvalue(), os.path.splitext(uploaded_file.name)[1])
 
