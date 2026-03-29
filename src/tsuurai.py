@@ -25,6 +25,25 @@ MODEL_INFO = {
     }
 }
 
+# Model comparison data
+MODEL_COMPARISON = {
+    "whisper": {
+        "strength": "Best zero-shot accuracy",
+        "weakness": "Hard to fine-tune",
+        "best_for": "Quick deployment, general use"
+    },
+    "meta_mms": {
+        "strength": "1162 language support",
+        "weakness": "Inconsistent quality",
+        "best_for": "Rare/low-resource languages"
+    },
+    "meta_seamless": {
+        "strength": "Most advanced, translation",
+        "weakness": "Less flexible",
+        "best_for": "Translation apps"
+    }
+}
+
 LANGUAGE_CODES = {
     "English": {"whisper": "en", "mms": "eng", "seamless": "eng"},
     "Mongolian": {"whisper": "mn", "mms": "mon", "seamless": "mon"},
@@ -71,6 +90,10 @@ with st.sidebar:
         index=0
     )
 
+    # Language-specific recommendation
+    if language == "Mongolian":
+        st.caption("For Mongolian: MMS has best coverage, Whisper is fastest")
+
     st.divider()
 
     # Model info display
@@ -87,6 +110,12 @@ with st.sidebar:
 
     st.info(f"Quality: **{info['quality']}**")
 
+    # Show model strengths/weaknesses
+    comparison = MODEL_COMPARISON[model_key]
+    st.success(f"Strength: {comparison['strength']}")
+    st.warning(f"Weakness: {comparison['weakness']}")
+    st.caption(f"Best for: {comparison['best_for']}")
+
     # Additional model details
     with st.expander("More Details"):
         st.write(f"**Family:** {model_family}")
@@ -101,6 +130,27 @@ with st.sidebar:
         else:
             st.write("**Architecture:** SeamlessM4T")
             st.write("**Features:** Speech-to-text, Translation")
+
+    # Honest comparison
+    with st.expander("Model Comparison"):
+        st.markdown("""
+| Model | Strength | Weakness | Best For |
+|-------|----------|----------|----------|
+| **Whisper** | Best zero-shot | Hard to fine-tune | Quick deployment |
+| **MMS** | 1162 languages | Inconsistent quality | Rare languages |
+| **SeamlessM4T** | Most advanced | Less flexible | Translation apps |
+        """)
+
+        # Contextual recommendation
+        if model_key == "whisper":
+            st.success("Recommended for: General use, English, quick setup")
+        elif model_key == "meta_mms":
+            if language == "Mongolian":
+                st.success("Good choice for Mongolian - trained on 1100+ languages")
+            else:
+                st.info("Better for rare languages. For English, consider Whisper.")
+        else:
+            st.success("Best for: Speech translation, multilingual apps")
 
 # Load model based on selection
 @st.cache_resource
