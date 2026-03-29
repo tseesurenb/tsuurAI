@@ -346,7 +346,7 @@ with st.sidebar:
         llm_type = st.radio(
             "LLM Type",
             ["OpenAI API", "Local LLM (GPU)"],
-            index=1 if language == "Mongolian" else 0,
+            index=0,  # Default: OpenAI API
             horizontal=True
         )
 
@@ -355,13 +355,13 @@ with st.sidebar:
             if openai_client:
                 llm_model = st.selectbox(
                     "API Model",
-                    ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "o1-mini", "o1"],
-                    index=0
+                    ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o1-mini", "o1"],
+                    index=0  # Default: gpt-4o
                 )
                 # Show model info
                 api_llm_info = {
-                    "gpt-4o-mini": {"cost": "$0.15/$0.60 per 1M", "speed": "Very fast", "quality": "Good"},
                     "gpt-4o": {"cost": "$2.50/$10 per 1M", "speed": "Fast", "quality": "Excellent"},
+                    "gpt-4o-mini": {"cost": "$0.15/$0.60 per 1M", "speed": "Very fast", "quality": "Good"},
                     "gpt-4-turbo": {"cost": "$10/$30 per 1M", "speed": "Medium", "quality": "Excellent"},
                     "o1-mini": {"cost": "$1.10/$4.40 per 1M", "speed": "Slower", "quality": "Best reasoning"},
                     "o1": {"cost": "$7.50/$30 per 1M", "speed": "Slow", "quality": "Most advanced"},
