@@ -59,7 +59,152 @@ LANGUAGE_CODES = {
     "Mongolian": {"whisper": "mn", "mms": "mon"},
 }
 
-# LLM Correction function
+# Local LLM models info
+LOCAL_LLM_INFO = {
+    "Mongolian-Llama3": {
+        "model_id": "Dorjzodovsuren/Mongolian_Llama3-v0.1",
+        "base_model": "unsloth/llama-3-8b-bnb-4bit",
+        "size_gb": 5.0,
+        "languages": "Mongolian, English",
+        "description": "First Mongolian instruction-tuned LLM"
+    },
+    "Qwen3-8B": {
+        "model_id": "Qwen/Qwen3-8B",
+        "base_model": None,
+        "size_gb": 5.0,
+        "languages": "119 languages",
+        "description": "Best multilingual coverage"
+    },
+}
+
+# Load local LLM
+@st.cache_resource
+def load_local_llm(model_name):
+    """Load a local LLM with 4-bit quantization"""
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+
+    model_info = LOCAL_LLM_INFO[model_name]
+
+    # 4-bit quantization config
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_use_double_quant=True,
+    )
+
+    hf_cache = MODELS_DIR / "huggingface"
+
+    if model_name == "Mongolian-Llama3":
+        # Mongolian-Llama3 uses PEFT adapter
+        from peft import PeftModel
+
+        # Load base model
+        base_model = AutoModelForCausalLM.from_pretrained(
+            model_info["base_model"],
+            quantization_config=bnb_config,
+            device_map="auto",
+            cache_dir=str(hf_cache),
+        )
+        # Load tokenizer from adapter
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_info["model_id"],
+            cache_dir=str(hf_cache),
+        )
+        # Load PEFT adapter
+        model = PeftModel.from_pretrained(
+            base_model,
+            model_info["model_id"],
+            cache_dir=str(hf_cache),
+        )
+    else:
+        # Standard model loading (Qwen, etc.)
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_info["model_id"],
+            cache_dir=str(hf_cache),
+            trust_remote_code=True,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            model_info["model_id"],
+            quantization_config=bnb_config,
+            device_map="auto",
+            cache_dir=str(hf_cache),
+            trust_remote_code=True,
+        )
+
+    return model, tokenizer
+
+def correct_with_local_llm(raw_text, language, model, tokenizer, n_best_candidates=None):
+    """Use local LLM to correct ASR output"""
+    import torch
+
+    # Build prompt
+    if n_best_candidates and len(n_best_candidates) > 1:
+        candidates_text = "\n".join([f"{i+1}. {c}" for i, c in enumerate(n_best_candidates)])
+        prompt = f"""You are an expert {language} language corrector for speech recognition output.
+
+Given these ASR candidates (ranked by confidence):
+{candidates_text}
+
+Select the best candidate and correct any errors. Fix:
+- Spelling mistakes
+- Grammar issues
+- Word boundaries (words incorrectly split or merged)
+- Common ASR errors
+
+Return ONLY the corrected {language} text, nothing else."""
+    else:
+        prompt = f"""You are an expert {language} language corrector for speech recognition output.
+
+Raw ASR output:
+{raw_text}
+
+Correct any errors in this {language} text. Fix:
+- Spelling mistakes
+- Grammar issues
+- Word boundaries (words incorrectly split or merged)
+- Common ASR errors
+
+Return ONLY the corrected {language} text, nothing else."""
+
+    try:
+        # Format for chat
+        messages = [{"role": "user", "content": prompt}]
+
+        # Try to use chat template if available
+        if hasattr(tokenizer, 'apply_chat_template'):
+            input_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        else:
+            input_text = f"User: {prompt}\nAssistant:"
+
+        inputs = tokenizer(input_text, return_tensors="pt").to(model.device)
+
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=500,
+                temperature=0.3,
+                do_sample=True,
+                pad_token_id=tokenizer.eos_token_id,
+            )
+
+        # Decode and extract response
+        full_response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+        # Extract only the generated part
+        if "Assistant:" in full_response:
+            corrected = full_response.split("Assistant:")[-1].strip()
+        else:
+            # Remove the input prompt from output
+            corrected = full_response[len(input_text):].strip()
+
+        return corrected, None
+
+    except Exception as e:
+        return raw_text, str(e)
+
+# LLM Correction function (OpenAI API)
 def correct_with_llm(raw_text, language, model_name="gpt-4o-mini", n_best_candidates=None):
     """Use OpenAI LLM to correct ASR output"""
     if not openai_client:
@@ -166,36 +311,58 @@ with st.sidebar:
 
     # LLM Correction toggle
     st.header("LLM Correction")
-    if openai_client:
-        use_llm_correction = st.toggle("Enable LLM correction", value=True)
-        if use_llm_correction:
-            llm_model = st.selectbox(
-                "LLM Model",
-                ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "o1-mini", "o1"],
-                index=0
-            )
-            # Show model info
-            llm_info = {
-                "gpt-4o-mini": {"cost": "$0.15/$0.60 per 1M", "speed": "Very fast", "quality": "Good"},
-                "gpt-4o": {"cost": "$2.50/$10 per 1M", "speed": "Fast", "quality": "Excellent"},
-                "gpt-4-turbo": {"cost": "$10/$30 per 1M", "speed": "Medium", "quality": "Excellent"},
-                "o1-mini": {"cost": "$1.10/$4.40 per 1M", "speed": "Slower", "quality": "Best reasoning"},
-                "o1": {"cost": "$7.50/$30 per 1M", "speed": "Slow", "quality": "Most advanced"},
-            }
-            info = llm_info[llm_model]
-            st.caption(f"{info['quality']} | {info['speed']} | {info['cost']}")
+    use_llm_correction = st.toggle("Enable LLM correction", value=True)
 
-            # Top-K candidates selection
-            top_k = st.slider("Top-K candidates", min_value=1, max_value=10, value=5)
-            st.caption(f"ASR will generate {top_k} candidates for LLM to choose from")
+    if use_llm_correction:
+        # Choose between API and Local LLM
+        llm_type = st.radio(
+            "LLM Type",
+            ["OpenAI API", "Local LLM (GPU)"],
+            index=1 if language == "Mongolian" else 0,
+            horizontal=True
+        )
+
+        if llm_type == "OpenAI API":
+            use_local_llm = False
+            if openai_client:
+                llm_model = st.selectbox(
+                    "API Model",
+                    ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "o1-mini", "o1"],
+                    index=0
+                )
+                # Show model info
+                api_llm_info = {
+                    "gpt-4o-mini": {"cost": "$0.15/$0.60 per 1M", "speed": "Very fast", "quality": "Good"},
+                    "gpt-4o": {"cost": "$2.50/$10 per 1M", "speed": "Fast", "quality": "Excellent"},
+                    "gpt-4-turbo": {"cost": "$10/$30 per 1M", "speed": "Medium", "quality": "Excellent"},
+                    "o1-mini": {"cost": "$1.10/$4.40 per 1M", "speed": "Slower", "quality": "Best reasoning"},
+                    "o1": {"cost": "$7.50/$30 per 1M", "speed": "Slow", "quality": "Most advanced"},
+                }
+                info = api_llm_info[llm_model]
+                st.caption(f"{info['quality']} | {info['speed']} | {info['cost']}")
+            else:
+                llm_model = None
+                st.warning("Set OPENAI_API_KEY environment variable")
         else:
-            llm_model = None
-            top_k = 1
+            use_local_llm = True
+            local_llm_name = st.selectbox(
+                "Local Model",
+                list(LOCAL_LLM_INFO.keys()),
+                index=0 if language == "Mongolian" else 1
+            )
+            llm_model = local_llm_name
+            # Show local model info
+            local_info = LOCAL_LLM_INFO[local_llm_name]
+            st.caption(f"{local_info['description']}")
+            st.caption(f"Size: {local_info['size_gb']} GB | Languages: {local_info['languages']}")
+
+        # Top-K candidates selection
+        top_k = st.slider("Top-K candidates", min_value=1, max_value=10, value=5)
+        st.caption(f"ASR will generate {top_k} candidates for LLM to choose from")
     else:
-        use_llm_correction = False
         llm_model = None
         top_k = 1
-        st.warning("Set OPENAI_API_KEY environment variable to enable.")
+        use_local_llm = False
 
     st.divider()
 
@@ -350,6 +517,14 @@ with st.spinner(loading_msg):
         mms_processor, mms_model = load_mms_model()
         st.success("Meta MMS ready! (saved to models/huggingface/)")
 
+# Load local LLM if selected
+local_llm_model = None
+local_llm_tokenizer = None
+if use_llm_correction and use_local_llm and llm_model:
+    with st.spinner(f"Loading {llm_model}... (first time may take a few minutes)"):
+        local_llm_model, local_llm_tokenizer = load_local_llm(llm_model)
+        st.success(f"Local LLM '{llm_model}' ready!")
+
 def transcribe_audio(audio_data, file_ext=".wav"):
     import torch
     import numpy as np
@@ -460,12 +635,23 @@ def transcribe_audio(audio_data, file_ext=".wav"):
             candidate_texts = [c["text"] for c in candidates] if len(candidates) > 1 else None
 
             with st.spinner(f"Correcting with {llm_model}..."):
-                corrected_text, error = correct_with_llm(
-                    full_text,
-                    language,
-                    model_name=llm_model,
-                    n_best_candidates=candidate_texts
-                )
+                if use_local_llm and local_llm_model is not None:
+                    # Use local LLM
+                    corrected_text, error = correct_with_local_llm(
+                        full_text,
+                        language,
+                        local_llm_model,
+                        local_llm_tokenizer,
+                        n_best_candidates=candidate_texts
+                    )
+                else:
+                    # Use OpenAI API
+                    corrected_text, error = correct_with_llm(
+                        full_text,
+                        language,
+                        model_name=llm_model,
+                        n_best_candidates=candidate_texts
+                    )
 
             if error:
                 st.warning(f"LLM correction failed: {error}")

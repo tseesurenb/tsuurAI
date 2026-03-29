@@ -6,3 +6,6 @@ librosa
 sentencepiece
 openai
 pyctcdecode
+bitsandbytes
+accelerate
+peft
