@@ -1,0 +1,8 @@
+Сайн байна уу?
+
+Speech to Text дээр ашиглах серверийн хандах эрхийг явуулж байна.
+
+IP Address: 161.118.212.47
+Username: ubuntu
+
+Command: ssh -i stt-server.key ubuntu@161.118.212.47
