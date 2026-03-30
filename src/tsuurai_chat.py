@@ -1,12 +1,18 @@
+#!/usr/bin/env python3
 """
-TsuurAI Chat Mode
-Launch with: streamlit run tsuurai_chat.py
+TsuurAI Chat Mode Entry Point
+Run with: streamlit run tsuurai_chat.py
 """
 
-import runpy
 import sys
 from pathlib import Path
 
-# Ensure correct __file__ for Streamlit
-sys.modules[__name__].__file__ = str(Path(__file__).parent / "chat" / "app.py")
-runpy.run_path(str(Path(__file__).parent / "chat" / "app.py"), run_name="__main__")
+# Add src to path
+SRC_DIR = Path(__file__).parent.resolve()
+sys.path.insert(0, str(SRC_DIR))
+
+# Run the chat app with correct __file__ set
+chat_app_path = SRC_DIR / "chat" / "app.py"
+chat_globals = globals().copy()
+chat_globals['__file__'] = str(chat_app_path)
+exec(compile(open(chat_app_path).read(), chat_app_path, 'exec'), chat_globals)
