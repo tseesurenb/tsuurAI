@@ -49,9 +49,10 @@ def load_mms_model():
 def load_local_llm(model_name):
     """Load a local LLM with 4-bit quantization"""
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer, BitsAndBytesConfig
 
     model_info = LOCAL_LLM_INFO[model_name]
+    arch = model_info.get("arch", "causal")
 
     # 4-bit quantization config
     bnb_config = BitsAndBytesConfig(
@@ -80,6 +81,19 @@ def load_local_llm(model_name):
             base_model,
             model_info["model_id"],
             cache_dir=str(hf_cache),
+        )
+    elif arch == "seq2seq":
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_info["model_id"],
+            cache_dir=str(hf_cache),
+            trust_remote_code=True,
+        )
+        model = AutoModelForSeq2SeqLM.from_pretrained(
+            model_info["model_id"],
+            quantization_config=bnb_config,
+            device_map="auto",
+            cache_dir=str(hf_cache),
+            trust_remote_code=True,
         )
     else:
         tokenizer = AutoTokenizer.from_pretrained(

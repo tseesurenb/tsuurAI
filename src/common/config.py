@@ -66,14 +66,32 @@ LOCAL_LLM_INFO = {
         "base_model": "unsloth/llama-3-8b-bnb-4bit",
         "size_gb": 5.0,
         "languages": "Mongolian, English",
-        "description": "First Mongolian instruction-tuned LLM"
+        "description": "First Mongolian instruction-tuned LLM",
+        "arch": "causal",
     },
     "Qwen3-8B": {
         "model_id": "Qwen/Qwen3-8B",
         "base_model": None,
         "size_gb": 5.0,
         "languages": "119 languages",
-        "description": "Best multilingual coverage"
+        "description": "Best multilingual coverage",
+        "arch": "causal",
+    },
+    "Aya-101": {
+        "model_id": "CohereForAI/aya-101",
+        "base_model": None,
+        "size_gb": 7.0,
+        "languages": "101 languages",
+        "description": "Massively multilingual generative model (mT5-based)",
+        "arch": "seq2seq",
+    },
+    "Mistral-NeMo": {
+        "model_id": "mistralai/Mistral-Nemo-Instruct-2407",
+        "base_model": None,
+        "size_gb": 8.0,
+        "languages": "Multilingual",
+        "description": "NVIDIA x Mistral 12B instruct model",
+        "arch": "causal",
     },
 }
 
